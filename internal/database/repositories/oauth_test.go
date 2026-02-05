@@ -13,9 +13,6 @@ import (
 // helper to get a *string from a literal
 func strPtr(s string) *string { return &s }
 
-// helper to get a *int64 from a literal
-func int64Ptr(n int64) *int64 { return &n }
-
 // makeTestClient returns a simple oauth.Client with the given ID.
 func makeTestClient(id string) *oauth.Client {
 	now := time.Now().Unix()

@@ -1,4 +1,4 @@
-package types
+package types //nolint:revive // package name is descriptive within graphql context
 
 import (
 	"testing"
@@ -132,7 +132,7 @@ func TestJSONScalar_Serialize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := JSONScalar.Serialize(tt.input)
 			// JSONScalar.Serialize is the identity function.
-			if fmt_eq(got, tt.want) == false {
+			if fmtEq(got, tt.want) == false {
 				t.Errorf("JSONScalar.Serialize(%v) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
@@ -156,15 +156,15 @@ func TestDateTimeScalar_Serialize(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got := DateTimeScalar.Serialize(tt.input)
 			// DateTimeScalar.Serialize is the identity function.
-			if fmt_eq(got, tt.want) == false {
+			if fmtEq(got, tt.want) == false {
 				t.Errorf("DateTimeScalar.Serialize(%v) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}
 }
 
-// fmt_eq is a simple equality check that handles nil comparisons.
-func fmt_eq(a, b interface{}) bool {
+// fmtEq is a simple equality check that handles nil comparisons.
+func fmtEq(a, b interface{}) bool {
 	if a == nil && b == nil {
 		return true
 	}
