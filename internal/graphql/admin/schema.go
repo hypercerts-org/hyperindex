@@ -1,0 +1,488 @@
+package admin
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/graphql-go/graphql"
+)
+
+// SchemaBuilder builds the admin GraphQL schema.
+type SchemaBuilder struct {
+	resolver *Resolver
+}
+
+// NewSchemaBuilder creates a new admin schema builder.
+func NewSchemaBuilder(resolver *Resolver) *SchemaBuilder {
+	return &SchemaBuilder{resolver: resolver}
+}
+
+// Build creates the complete admin GraphQL schema.
+func (b *SchemaBuilder) Build() (*graphql.Schema, error) {
+	queryType := b.buildQueryType()
+	mutationType := b.buildMutationType()
+
+	schema, err := graphql.NewSchema(graphql.SchemaConfig{
+		Query:    queryType,
+		Mutation: mutationType,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create admin schema: %w", err)
+	}
+
+	return &schema, nil
+}
+
+// buildQueryType builds the root Query type for the admin API.
+func (b *SchemaBuilder) buildQueryType() *graphql.Object {
+	return graphql.NewObject(graphql.ObjectConfig{
+		Name:        "Query",
+		Description: "Admin API queries",
+		Fields: graphql.Fields{
+			"currentSession": &graphql.Field{
+				Type:        CurrentSessionType,
+				Description: "Get current authenticated user session",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					// Session info is extracted from context in the HTTP handler
+					ctx := p.Context
+					userDID, _ := ctx.Value(contextKeyUserDID).(string)
+					handle, _ := ctx.Value(contextKeyHandle).(string)
+					adminDIDs, _ := ctx.Value(contextKeyAdminDIDs).([]string)
+
+					if userDID == "" {
+						return nil, nil // Not authenticated
+					}
+
+					return b.resolver.CurrentSession(ctx, userDID, handle, adminDIDs), nil
+				},
+			},
+			"statistics": &graphql.Field{
+				Type:        graphql.NewNonNull(StatisticsType),
+				Description: "Get system statistics",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					return b.resolver.Statistics(p.Context)
+				},
+			},
+			"settings": &graphql.Field{
+				Type:        graphql.NewNonNull(SettingsType),
+				Description: "Get system settings",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					return b.resolver.Settings(p.Context)
+				},
+			},
+			"isBackfilling": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Check if a backfill is currently running",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					return b.resolver.IsBackfilling(), nil
+				},
+			},
+			"lexicons": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(LexiconType))),
+				Description: "Get all lexicon definitions",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					return b.resolver.Lexicons(p.Context)
+				},
+			},
+			"oauthClients": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(OAuthClientType))),
+				Description: "Get all OAuth client registrations (admin only)",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					return b.resolver.OAuthClients(p.Context)
+				},
+			},
+			"activityBuckets": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(ActivityBucketType))),
+				Description: "Get aggregated activity data for a time range",
+				Args: graphql.FieldConfigArgument{
+					"range": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(TimeRangeEnum),
+						Description: "Time range for bucketing",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					timeRange, _ := p.Args["range"].(string)
+					return b.resolver.ActivityBuckets(p.Context, timeRange)
+				},
+			},
+			"recentActivity": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(ActivityEntryType))),
+				Description: "Get recent activity entries",
+				Args: graphql.FieldConfigArgument{
+					"hours": &graphql.ArgumentConfig{
+						Type:         graphql.NewNonNull(graphql.Int),
+						Description:  "Number of hours to look back",
+						DefaultValue: 1,
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					hours, _ := p.Args["hours"].(int)
+					if hours < 1 {
+						hours = 1
+					}
+					if hours > 168 {
+						hours = 168 // Max 7 days
+					}
+					return b.resolver.RecentActivity(p.Context, hours)
+				},
+			},
+			"labelDefinitions": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(LabelDefinitionType))),
+				Description: "Get all label definitions",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					return b.resolver.LabelDefinitions(p.Context)
+				},
+			},
+			"viewerLabelPreferences": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(LabelPreferenceType))),
+				Description: "Get current user's label preferences (authenticated)",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					userDID, _ := p.Context.Value(contextKeyUserDID).(string)
+					if userDID == "" {
+						return nil, fmt.Errorf("authentication required")
+					}
+					return b.resolver.ViewerLabelPreferences(p.Context, userDID)
+				},
+			},
+			"labels": &graphql.Field{
+				Type:        graphql.NewNonNull(LabelConnectionType),
+				Description: "Get labels with optional filters (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"uri": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Filter by subject URI",
+					},
+					"val": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Filter by label value",
+					},
+					"first": &graphql.ArgumentConfig{
+						Type:         graphql.Int,
+						Description:  "Number of items to return",
+						DefaultValue: 20,
+					},
+					"after": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Cursor for pagination",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					uri, _ := p.Args["uri"].(string)
+					val, _ := p.Args["val"].(string)
+					first, _ := p.Args["first"].(int)
+					after, _ := p.Args["after"].(string)
+
+					var uriPtr, valPtr, afterPtr *string
+					if uri != "" {
+						uriPtr = &uri
+					}
+					if val != "" {
+						valPtr = &val
+					}
+					if after != "" {
+						afterPtr = &after
+					}
+
+					return b.resolver.Labels(p.Context, uriPtr, valPtr, first, afterPtr)
+				},
+			},
+			"reports": &graphql.Field{
+				Type:        graphql.NewNonNull(ReportConnectionType),
+				Description: "Get moderation reports (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"status": &graphql.ArgumentConfig{
+						Type:        ReportStatusEnum,
+						Description: "Filter by status",
+					},
+					"first": &graphql.ArgumentConfig{
+						Type:         graphql.Int,
+						Description:  "Number of items to return",
+						DefaultValue: 20,
+					},
+					"after": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Cursor for pagination",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					status, _ := p.Args["status"].(string)
+					first, _ := p.Args["first"].(int)
+					after, _ := p.Args["after"].(string)
+
+					var statusPtr, afterPtr *string
+					if status != "" {
+						statusPtr = &status
+					}
+					if after != "" {
+						afterPtr = &after
+					}
+
+					return b.resolver.Reports(p.Context, statusPtr, first, afterPtr)
+				},
+			},
+		},
+	})
+}
+
+// buildMutationType builds the root Mutation type for the admin API.
+func (b *SchemaBuilder) buildMutationType() *graphql.Object {
+	return graphql.NewObject(graphql.ObjectConfig{
+		Name:        "Mutation",
+		Description: "Admin API mutations",
+		Fields: graphql.Fields{
+			"updateSettings": &graphql.Field{
+				Type:        graphql.NewNonNull(SettingsType),
+				Description: "Update system settings (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"domainAuthority": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Domain authority (e.g., example.com)",
+					},
+					"adminDids": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Comma-separated list of admin DIDs",
+					},
+					"relayUrl": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "AT Protocol relay URL",
+					},
+					"plcDirectoryUrl": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "PLC directory URL",
+					},
+					"jetstreamUrl": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Jetstream WebSocket URL",
+					},
+					"oauthSupportedScopes": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Space-separated OAuth scopes",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+
+					domainAuthority, _ := p.Args["domainAuthority"].(string)
+					adminDids, _ := p.Args["adminDids"].(string)
+					relayURL, _ := p.Args["relayUrl"].(string)
+					plcDirectoryURL, _ := p.Args["plcDirectoryUrl"].(string)
+					jetstreamURL, _ := p.Args["jetstreamUrl"].(string)
+					oauthScopes, _ := p.Args["oauthSupportedScopes"].(string)
+
+					var domainPtr, adminPtr, relayPtr, plcPtr, jetPtr, scopesPtr *string
+					if domainAuthority != "" {
+						domainPtr = &domainAuthority
+					}
+					if adminDids != "" {
+						adminPtr = &adminDids
+					}
+					if relayURL != "" {
+						relayPtr = &relayURL
+					}
+					if plcDirectoryURL != "" {
+						plcPtr = &plcDirectoryURL
+					}
+					if jetstreamURL != "" {
+						jetPtr = &jetstreamURL
+					}
+					if oauthScopes != "" {
+						scopesPtr = &oauthScopes
+					}
+
+					return b.resolver.UpdateSettings(p.Context, domainPtr, adminPtr, relayPtr, plcPtr, jetPtr, scopesPtr)
+				},
+			},
+			"resetAll": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Delete all data (admin only, requires confirmation)",
+				Args: graphql.FieldConfigArgument{
+					"confirm": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Must be 'RESET' to confirm",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					confirm, _ := p.Args["confirm"].(string)
+					return b.resolver.ResetAll(p.Context, confirm)
+				},
+			},
+			"createLabel": &graphql.Field{
+				Type:        graphql.NewNonNull(LabelType),
+				Description: "Create a label on a record or account (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"uri": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Subject URI (at:// or did:)",
+					},
+					"val": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Label value",
+					},
+					"cid": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Optional CID for version-specific label",
+					},
+					"exp": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Optional expiration timestamp (ISO 8601)",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					uri, _ := p.Args["uri"].(string)
+					val, _ := p.Args["val"].(string)
+					cid, _ := p.Args["cid"].(string)
+					exp, _ := p.Args["exp"].(string)
+
+					var cidPtr, expPtr *string
+					if cid != "" {
+						cidPtr = &cid
+					}
+					if exp != "" {
+						expPtr = &exp
+					}
+
+					return b.resolver.CreateLabel(p.Context, uri, val, cidPtr, expPtr)
+				},
+			},
+			"negateLabel": &graphql.Field{
+				Type:        graphql.NewNonNull(LabelType),
+				Description: "Negate (retract) a label (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"uri": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Subject URI (at:// or did:)",
+					},
+					"val": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Label value to negate",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					uri, _ := p.Args["uri"].(string)
+					val, _ := p.Args["val"].(string)
+					return b.resolver.NegateLabel(p.Context, uri, val)
+				},
+			},
+			"createLabelDefinition": &graphql.Field{
+				Type:        graphql.NewNonNull(LabelDefinitionType),
+				Description: "Create a new label definition (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"val": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Label value",
+					},
+					"description": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Human-readable description",
+					},
+					"severity": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(LabelSeverityEnum),
+						Description: "Severity level",
+					},
+					"defaultVisibility": &graphql.ArgumentConfig{
+						Type:        LabelVisibilityEnum,
+						Description: "Default visibility (defaults to 'warn')",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					val, _ := p.Args["val"].(string)
+					description, _ := p.Args["description"].(string)
+					severity, _ := p.Args["severity"].(string)
+					defaultVisibility, _ := p.Args["defaultVisibility"].(string)
+
+					var visPtr *string
+					if defaultVisibility != "" {
+						visPtr = &defaultVisibility
+					}
+
+					return b.resolver.CreateLabelDefinition(p.Context, val, description, severity, visPtr)
+				},
+			},
+			"resolveReport": &graphql.Field{
+				Type:        graphql.NewNonNull(ReportType),
+				Description: "Resolve a moderation report (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"id": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.Int),
+						Description: "Report ID",
+					},
+					"action": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(ReportActionEnum),
+						Description: "Action to take",
+					},
+					"labelVal": &graphql.ArgumentConfig{
+						Type:        graphql.String,
+						Description: "Label value to apply (required for apply_label action)",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					id, _ := p.Args["id"].(int)
+					action, _ := p.Args["action"].(string)
+					labelVal, _ := p.Args["labelVal"].(string)
+
+					var labelValPtr *string
+					if labelVal != "" {
+						labelValPtr = &labelVal
+					}
+
+					resolverDID, _ := p.Context.Value(contextKeyUserDID).(string)
+					return b.resolver.ResolveReport(p.Context, int64(id), action, labelValPtr, resolverDID)
+				},
+			},
+		},
+	})
+}
+
+// Context keys for passing auth info to resolvers.
+type contextKey string
+
+const (
+	contextKeyUserDID   contextKey = "userDID"
+	contextKeyHandle    contextKey = "handle"
+	contextKeyIsAdmin   contextKey = "isAdmin"
+	contextKeyAdminDIDs contextKey = "adminDIDs"
+)
+
+// ContextWithAuth adds authentication info to the context.
+func ContextWithAuth(ctx context.Context, userDID, handle string, isAdmin bool, adminDIDs []string) context.Context {
+	ctx = context.WithValue(ctx, contextKeyUserDID, userDID)
+	ctx = context.WithValue(ctx, contextKeyHandle, handle)
+	ctx = context.WithValue(ctx, contextKeyIsAdmin, isAdmin)
+	ctx = context.WithValue(ctx, contextKeyAdminDIDs, adminDIDs)
+	return ctx
+}
+
+// requireAdmin checks if the current user is an admin.
+func requireAdmin(ctx context.Context) error {
+	isAdmin, _ := ctx.Value(contextKeyIsAdmin).(bool)
+	if !isAdmin {
+		return fmt.Errorf("admin privileges required")
+	}
+	return nil
+}
