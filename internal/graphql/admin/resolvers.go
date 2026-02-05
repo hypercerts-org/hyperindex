@@ -41,13 +41,17 @@ type BackfillCallback func(ctx context.Context, did string) error
 // FullBackfillCallback is called when full network backfill is triggered.
 type FullBackfillCallback func(ctx context.Context) error
 
+// LexiconChangeCallback is called when lexicons are added or removed.
+type LexiconChangeCallback func(collections []string) error
+
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
 type Resolver struct {
-	repos                *Repositories
-	backfillActive       bool
-	domainDID            string // The DID of this labeler instance
-	backfillCallback     BackfillCallback
-	fullBackfillCallback FullBackfillCallback
+	repos                 *Repositories
+	backfillActive        bool
+	domainDID             string // The DID of this labeler instance
+	backfillCallback      BackfillCallback
+	fullBackfillCallback  FullBackfillCallback
+	lexiconChangeCallback LexiconChangeCallback
 }
 
 // NewResolver creates a new admin resolver.
@@ -66,6 +70,33 @@ func (r *Resolver) SetBackfillCallback(cb BackfillCallback) {
 // SetFullBackfillCallback sets the callback for full network backfill operations.
 func (r *Resolver) SetFullBackfillCallback(cb FullBackfillCallback) {
 	r.fullBackfillCallback = cb
+}
+
+// SetLexiconChangeCallback sets the callback for lexicon changes.
+func (r *Resolver) SetLexiconChangeCallback(cb LexiconChangeCallback) {
+	r.lexiconChangeCallback = cb
+}
+
+// notifyLexiconChange calls the lexicon change callback with current collections.
+func (r *Resolver) notifyLexiconChange(ctx context.Context) {
+	if r.lexiconChangeCallback == nil {
+		return
+	}
+
+	lexicons, err := r.repos.Lexicons.GetAll(ctx)
+	if err != nil {
+		return
+	}
+
+	collections := make([]string, len(lexicons))
+	for i, lex := range lexicons {
+		collections[i] = lex.ID
+	}
+
+	if err := r.lexiconChangeCallback(collections); err != nil {
+		// Log but don't fail the operation
+		fmt.Printf("Failed to notify lexicon change: %v\n", err)
+	}
 }
 
 // =============================================================================
@@ -245,6 +276,11 @@ func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, e
 			return count, fmt.Errorf("failed to save lexicon %s: %w", lexicon.ID, err)
 		}
 		count++
+	}
+
+	// Notify Jetstream consumer of collection changes
+	if count > 0 {
+		r.notifyLexiconChange(ctx)
 	}
 
 	return count, nil
@@ -555,6 +591,9 @@ func (r *Resolver) DeleteLexicon(ctx context.Context, nsid string) (bool, error)
 		return false, fmt.Errorf("failed to delete lexicon: %w", err)
 	}
 
+	// Notify Jetstream consumer of collection changes
+	r.notifyLexiconChange(ctx)
+
 	return true, nil
 }
 
@@ -596,6 +635,9 @@ func (r *Resolver) RecentActivity(ctx context.Context, hours int) ([]map[string]
 			"did":        entry.DID,
 			"status":     entry.Status,
 			"eventJson":  entry.EventJSON,
+		}
+		if entry.RKey != nil {
+			item["rkey"] = *entry.RKey
 		}
 		if entry.ErrorMessage != nil {
 			item["errorMessage"] = *entry.ErrorMessage
@@ -893,7 +935,7 @@ func (r *Resolver) PopulateActivity(ctx context.Context) (int64, error) {
 		timestamp := extractCreatedAt(rec.JSON)
 
 		// Log as a successful create operation
-		_, err := r.repos.Activity.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.JSON, "success")
+		_, err := r.repos.Activity.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.RKey, rec.JSON, "success")
 		if err != nil {
 			// Log error but continue processing
 			return nil
@@ -917,21 +959,19 @@ func extractCreatedAt(recordJSON string) time.Time {
 		return time.Now()
 	}
 
-	createdAt, ok := data["createdAt"].(string)
-	if !ok {
-		return time.Now()
-	}
-
-	// Try parsing as RFC3339
-	t, err := time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		// Try without timezone
-		t, err = time.Parse("2006-01-02T15:04:05", createdAt)
-		if err != nil {
-			return time.Now()
+	// Try common timestamp field names
+	for _, field := range []string{"createdAt", "$createdAt", "created_at", "timestamp", "indexedAt"} {
+		if val, ok := data[field].(string); ok {
+			if t, err := time.Parse(time.RFC3339, val); err == nil {
+				return t
+			}
+			if t, err := time.Parse("2006-01-02T15:04:05", val); err == nil {
+				return t
+			}
 		}
 	}
-	return t
+
+	return time.Now()
 }
 
 // CreateLabel creates a new label on a record or account.

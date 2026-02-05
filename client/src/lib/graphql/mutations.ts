@@ -138,3 +138,10 @@ export const DELETE_LEXICON = gql`
     deleteLexicon(nsid: $nsid)
   }
 `;
+
+// Populate Activity from existing records
+export const POPULATE_ACTIVITY = gql`
+  mutation PopulateActivity {
+    populateActivity
+  }
+`;

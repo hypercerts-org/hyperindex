@@ -539,7 +539,7 @@ func (b *Backfiller) processRepo(ctx context.Context, pdsURL string, data *Atpro
 			if b.activityRepo != nil {
 				for _, rec := range filteredRecords {
 					timestamp := extractCreatedAt(rec.JSON)
-					_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.JSON, "success")
+					_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.RKey, rec.JSON, "success")
 					if err != nil {
 						slog.Debug("[backfill] Failed to log activity", "uri", rec.URI, "error", err)
 					}
@@ -668,7 +668,8 @@ func (b *Backfiller) processRepoLegacy(ctx context.Context, pdsURL string, data 
 				// Log activity for the inserted record
 				if b.activityRepo != nil {
 					timestamp := extractCreatedAt(string(rec.Value))
-					_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", collection, data.DID, string(rec.Value), "success")
+					rkey := extractRKeyFromURI(rec.URI)
+					_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", collection, data.DID, rkey, string(rec.Value), "success")
 					if err != nil {
 						slog.Debug("[backfill] Failed to log activity", "uri", rec.URI, "error", err)
 					}
@@ -751,7 +752,7 @@ func (b *Backfiller) BackfillActor(ctx context.Context, did string) (int, error)
 		if b.activityRepo != nil {
 			for _, rec := range filteredRecords {
 				timestamp := extractCreatedAt(rec.JSON)
-				_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.JSON, "success")
+				_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.RKey, rec.JSON, "success")
 				if err != nil {
 					slog.Debug("[backfill] Failed to log activity", "uri", rec.URI, "error", err)
 				}
@@ -795,7 +796,8 @@ func (b *Backfiller) backfillActorLegacy(ctx context.Context, data *AtprotoData)
 				// Log activity for the inserted record
 				if b.activityRepo != nil {
 					timestamp := extractCreatedAt(string(rec.Value))
-					_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", collection, data.DID, string(rec.Value), "success")
+					rkey := extractRKeyFromURI(rec.URI)
+					_, err := b.activityRepo.LogActivityWithStatus(ctx, timestamp, "create", collection, data.DID, rkey, string(rec.Value), "success")
 					if err != nil {
 						slog.Debug("[backfill] Failed to log activity", "uri", rec.URI, "error", err)
 					}
@@ -829,6 +831,16 @@ func ParseCollections(s string) []string {
 	return result
 }
 
+// extractRKeyFromURI extracts the rkey from an AT-URI (at://did/collection/rkey).
+func extractRKeyFromURI(uri string) string {
+	// URI format: at://did/collection/rkey
+	parts := strings.Split(uri, "/")
+	if len(parts) >= 5 {
+		return parts[len(parts)-1]
+	}
+	return ""
+}
+
 // extractCreatedAt extracts the createdAt timestamp from a record's JSON.
 // Returns the parsed time or the current time if not found/parseable.
 func extractCreatedAt(recordJSON string) time.Time {
@@ -837,19 +849,17 @@ func extractCreatedAt(recordJSON string) time.Time {
 		return time.Now()
 	}
 
-	createdAt, ok := data["createdAt"].(string)
-	if !ok {
-		return time.Now()
-	}
-
-	// Try parsing as RFC3339
-	t, err := time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		// Try without timezone
-		t, err = time.Parse("2006-01-02T15:04:05", createdAt)
-		if err != nil {
-			return time.Now()
+	// Try common timestamp field names
+	for _, field := range []string{"createdAt", "$createdAt", "created_at", "timestamp", "indexedAt"} {
+		if val, ok := data[field].(string); ok {
+			if t, err := time.Parse(time.RFC3339, val); err == nil {
+				return t
+			}
+			if t, err := time.Parse("2006-01-02T15:04:05", val); err == nil {
+				return t
+			}
 		}
 	}
-	return t
+
+	return time.Now()
 }

@@ -47,8 +47,8 @@ This document tracks the implementation of Hypergoat, a Go port of [Quickslice](
 - [x] Create project directory structure
 - [x] Configure `.golangci.yml` for linting
 - [x] Set up Makefile with common tasks
-- [ ] Create Dockerfile and docker-compose.yml
-- [ ] Set up GitHub Actions for CI
+- [x] Create Dockerfile and docker-compose.yml
+- [x] Set up GitHub Actions for CI
 
 **Files to create:**
 ```
@@ -1070,17 +1070,15 @@ func (ac *ActivityCleanup) Start(ctx context.Context)
 
 ---
 
-## Phase 7: Server Integration & Complete OAuth (Week 7-8) 🔄 IN PROGRESS
+## Phase 7: Server Integration & Complete OAuth (Week 7-8) ✅ COMPLETE
 
-> **Current Tasks:** See `bd ready` for available work. Epic: `adventure-n96`
->
-> **Focus Areas:**
-> - Wire up OAuth discovery endpoints (/.well-known/*)
-> - Wire up OAuth flow endpoints (/oauth/*)
-> - Add missing admin mutations (uploadLexicons, triggerBackfill, etc.)
-> - Add GraphiQL playgrounds (CDN-hosted)
-> - Start background workers on server init
-> - Integration tests
+> **Implementation Notes:**
+> - Main server: `cmd/hypergoat/main.go` (730 lines)
+> - OAuth handlers: `internal/server/oauth_handlers.go`, `oauth_register.go`, `oauth_par.go`
+> - GraphiQL: `internal/server/graphiql.go`
+> - All endpoints wired up and functional
+> - Background workers running (activity cleanup, OAuth token cleanup)
+> - Graceful shutdown implemented
 
 ### 7.1 HTTP Router Setup
 
@@ -1213,11 +1211,11 @@ func HealthHandler(db database.Executor) http.HandlerFunc {
 
 ### 7.5 API Compatibility Testing
 
-- [ ] Verify GraphQL schema matches Quickslice output
+- [x] Verify GraphQL schema matches Quickslice output
 - [ ] Test with quickslice-client-js SDK
 - [ ] Test OAuth flows with Bluesky PDS
-- [ ] Test Jetstream event handling
-- [ ] Test backfill with real data
+- [x] Test Jetstream event handling
+- [x] Test backfill with real data (integration tests in `internal/backfill/backfill_integration_test.go`)
 
 ---
 
@@ -1332,11 +1330,11 @@ require (
 
 ## Success Criteria
 
-- [ ] All Quickslice GraphQL queries work identically
-- [ ] OAuth flows work with Bluesky PDS
-- [ ] Jetstream sync maintains cursor across restarts
-- [ ] Backfill completes successfully
-- [ ] Admin UI functions correctly
-- [ ] Performance >= Quickslice for typical workloads
-- [ ] Docker deployment works
-- [ ] All tests pass
+- [x] All Quickslice GraphQL queries work identically
+- [ ] OAuth flows work with Bluesky PDS (partial - endpoints implemented, needs real-world testing)
+- [x] Jetstream sync maintains cursor across restarts
+- [x] Backfill completes successfully
+- [x] Admin UI functions correctly
+- [ ] Performance >= Quickslice for typical workloads (not benchmarked)
+- [x] Docker deployment works
+- [x] All tests pass

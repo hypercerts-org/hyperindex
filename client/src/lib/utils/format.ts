@@ -21,3 +21,18 @@ export function formatDateTime(date: string | Date): string {
 export function formatRelative(date: string | Date): string {
   return formatDistanceToNow(new Date(date), { addSuffix: true });
 }
+
+export function formatTime(date: string | Date): string {
+  return format(new Date(date), "HH:mm");
+}
+
+export function formatTimestamp(date: string | Date): string {
+  const d = new Date(date);
+  const now = new Date();
+  const isToday = d.toDateString() === now.toDateString();
+  
+  if (isToday) {
+    return format(d, "HH:mm");
+  }
+  return format(d, "MMM d, HH:mm");
+}

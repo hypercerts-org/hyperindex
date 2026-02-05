@@ -3,6 +3,8 @@
 Hypergoat is a Go port of Quickslice - an AT Protocol AppView server that indexes
 Lexicon-defined records and exposes them via a dynamically-generated GraphQL API.
 
+**Status:** Core functionality complete (Phases 1-7). All tests passing.
+
 Use `bd` for task tracking. Run `bd onboard` to get started.
 
 ## Build/Test Commands
@@ -146,25 +148,30 @@ slog.Error("Database connection failed", "error", err)
 ## Project Structure
 
 ```
-cmd/hypergoat/          # Main entry point
+cmd/hypergoat/          # Main entry point (server initialization, routing)
 internal/
-  backfill/             # Historical data backfill
-  config/               # Configuration loading
+  backfill/             # Historical data backfill from AT Protocol relays
+  config/               # Configuration loading from environment
   database/
     migrations/         # SQL migrations (auto-run on startup)
     repositories/       # Data access layer (records, actors, lexicons, oauth, etc.)
-    sqlite/             # SQLite implementation
-    postgres/           # PostgreSQL implementation
+    sqlite/             # SQLite implementation (pure Go, no CGO)
+    postgres/           # PostgreSQL implementation (pgx)
   graphql/
-    admin/              # Admin API (schema.go, resolvers.go, handler.go)
-    schema/             # Public schema builder
-    resolver/           # Public resolvers
-    subscription/       # WebSocket subscriptions
+    admin/              # Admin API (schema.go, resolvers.go, handler.go, types.go)
+    schema/             # Public schema builder (dynamic from lexicons)
+    resolver/           # Public resolvers and context
+    query/              # Connection types (Relay spec)
+    subscription/       # WebSocket subscriptions (graphql-transport-ws)
+    types/              # GraphQL type mapping from lexicons
+  integration/          # Integration tests
   jetstream/            # Real-time AT Protocol event consumer
-  lexicon/              # Lexicon parsing
-  oauth/                # OAuth 2.0 + DPoP implementation
-  server/               # HTTP handlers
-  workers/              # Background jobs
+  lexicon/              # Lexicon parsing, registry, NSID utilities
+  oauth/                # OAuth 2.0 + DPoP + PKCE implementation
+  server/               # HTTP handlers (GraphiQL, OAuth endpoints)
+  workers/              # Background jobs (activity cleanup, backfill state)
+docs/                   # Implementation plan and documentation
+testdata/               # Test fixtures and sample lexicons
 ```
 
 ## Landing the Plane (Session Completion)

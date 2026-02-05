@@ -1,0 +1,4 @@
+-- Note: SQLite doesn't support DROP COLUMN directly in older versions
+-- This is a no-op for rollback; manual intervention may be needed
+-- DROP INDEX IF EXISTS idx_jetstream_activity_rkey;
+-- ALTER TABLE jetstream_activity DROP COLUMN rkey;

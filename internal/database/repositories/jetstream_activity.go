@@ -16,6 +16,7 @@ type ActivityEntry struct {
 	Operation    string
 	Collection   string
 	DID          string
+	RKey         *string
 	Status       string
 	ErrorMessage *string
 	EventJSON    string
@@ -44,36 +45,39 @@ func NewJetstreamActivityRepository(db database.Executor) *JetstreamActivityRepo
 func (r *JetstreamActivityRepository) LogActivity(
 	ctx context.Context,
 	timestamp time.Time,
-	operation, collection, did, eventJSON string,
+	operation, collection, did, rkey, eventJSON string,
 ) (int64, error) {
-	return r.LogActivityWithStatus(ctx, timestamp, operation, collection, did, eventJSON, "pending")
+	return r.LogActivityWithStatus(ctx, timestamp, operation, collection, did, rkey, eventJSON, "pending")
 }
 
 // LogActivityWithStatus logs a new activity entry with a custom status and returns the ID.
 func (r *JetstreamActivityRepository) LogActivityWithStatus(
 	ctx context.Context,
 	timestamp time.Time,
-	operation, collection, did, eventJSON, status string,
+	operation, collection, did, rkey, eventJSON, status string,
 ) (int64, error) {
 	var sqlStr string
 	var timestampStr string
 
+	// Always store in UTC for consistency
+	utcTime := timestamp.UTC()
+
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		timestampStr = timestamp.Format(time.RFC3339)
+		timestampStr = utcTime.Format(time.RFC3339)
 		sqlStr = fmt.Sprintf(`INSERT INTO jetstream_activity 
-			(timestamp, operation, collection, did, status, event_json)
-			VALUES (%s, %s, %s, %s, %s, %s)
+			(timestamp, operation, collection, did, rkey, status, event_json)
+			VALUES (%s, %s, %s, %s, %s, %s, %s)
 			RETURNING id`,
 			r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3),
-			r.db.Placeholder(4), r.db.Placeholder(5), r.db.Placeholder(6))
+			r.db.Placeholder(4), r.db.Placeholder(5), r.db.Placeholder(6), r.db.Placeholder(7))
 	default:
-		timestampStr = timestamp.Format("2006-01-02 15:04:05")
+		timestampStr = utcTime.Format("2006-01-02 15:04:05")
 		sqlStr = fmt.Sprintf(`INSERT INTO jetstream_activity 
-			(timestamp, operation, collection, did, status, event_json)
-			VALUES (%s, %s, %s, %s, %s, %s)`,
+			(timestamp, operation, collection, did, rkey, status, event_json)
+			VALUES (%s, %s, %s, %s, %s, %s, %s)`,
 			r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3),
-			r.db.Placeholder(4), r.db.Placeholder(5), r.db.Placeholder(6))
+			r.db.Placeholder(4), r.db.Placeholder(5), r.db.Placeholder(6), r.db.Placeholder(7))
 	}
 
 	params := []database.Value{
@@ -81,6 +85,7 @@ func (r *JetstreamActivityRepository) LogActivityWithStatus(
 		database.Text(operation),
 		database.Text(collection),
 		database.Text(did),
+		database.Text(rkey),
 		database.Text(status),
 		database.Text(eventJSON),
 	}
@@ -125,13 +130,13 @@ func (r *JetstreamActivityRepository) GetRecentActivity(ctx context.Context, hou
 	var sqlStr string
 	switch r.db.Dialect() {
 	case database.PostgreSQL:
-		sqlStr = fmt.Sprintf(`SELECT id, timestamp, operation, collection, did, status, error_message, event_json
+		sqlStr = fmt.Sprintf(`SELECT id, timestamp, operation, collection, did, rkey, status, error_message, event_json
 			FROM jetstream_activity
 			WHERE timestamp >= NOW() - INTERVAL '%d hours'
 			ORDER BY timestamp DESC
 			LIMIT 1000`, hours)
 	default:
-		sqlStr = fmt.Sprintf(`SELECT id, timestamp, operation, collection, did, status, error_message, event_json
+		sqlStr = fmt.Sprintf(`SELECT id, timestamp, operation, collection, did, rkey, status, error_message, event_json
 			FROM jetstream_activity
 			WHERE timestamp >= datetime('now', '-%d hours')
 			ORDER BY timestamp DESC
@@ -256,16 +261,20 @@ func scanActivityEntries(rows *sql.Rows) ([]ActivityEntry, error) {
 	for rows.Next() {
 		var entry ActivityEntry
 		var timestampStr string
+		var rkey sql.NullString
 		var errorMessage sql.NullString
 
 		if err := rows.Scan(&entry.ID, &timestampStr, &entry.Operation, &entry.Collection,
-			&entry.DID, &entry.Status, &errorMessage, &entry.EventJSON); err != nil {
+			&entry.DID, &rkey, &entry.Status, &errorMessage, &entry.EventJSON); err != nil {
 			return nil, err
 		}
 
 		entry.Timestamp, _ = time.Parse(time.RFC3339, timestampStr)
 		if entry.Timestamp.IsZero() {
 			entry.Timestamp, _ = time.Parse("2006-01-02 15:04:05", timestampStr)
+		}
+		if rkey.Valid {
+			entry.RKey = &rkey.String
 		}
 		if errorMessage.Valid {
 			entry.ErrorMessage = &errorMessage.String

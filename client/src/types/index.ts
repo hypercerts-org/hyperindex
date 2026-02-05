@@ -37,6 +37,7 @@ export interface ActivityEntry {
   operation: string;
   collection: string;
   did: string;
+  rkey?: string;
   status: string;
   errorMessage?: string;
 }

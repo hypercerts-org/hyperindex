@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import {
   GET_STATISTICS,
@@ -9,6 +9,7 @@ import {
   GET_RECENT_ACTIVITY,
   GET_SETTINGS,
 } from "@/lib/graphql/queries";
+import { POPULATE_ACTIVITY } from "@/lib/graphql/mutations";
 import { StatsCards } from "@/components/dashboard/StatsCards";
 import { ActivityChart } from "@/components/dashboard/ActivityChart";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
@@ -24,6 +25,7 @@ import type {
 
 export default function Dashboard() {
   const [timeRange, setTimeRange] = useState<TimeRange>("ONE_DAY");
+  const queryClient = useQueryClient();
 
   // Fetch statistics
   const { data: statsData, isLoading: statsLoading } = useQuery({
@@ -53,6 +55,20 @@ export default function Dashboard() {
       graphqlClient.request<RecentActivityResponse>(GET_RECENT_ACTIVITY, {
         hours: 24,
       }),
+  });
+
+  // Populate activity mutation
+  const populateActivity = useMutation({
+    mutationFn: () => graphqlClient.request<{ populateActivity: number }>(POPULATE_ACTIVITY),
+    onSuccess: (data) => {
+      // Refetch activity data
+      queryClient.invalidateQueries({ queryKey: ["recentActivity"] });
+      queryClient.invalidateQueries({ queryKey: ["activityBuckets"] });
+      alert(`Populated ${data.populateActivity} activity entries`);
+    },
+    onError: (error: Error) => {
+      alert(`Error: ${error.message}`);
+    },
   });
 
   const stats = statsData?.statistics ?? { recordCount: 0, actorCount: 0, lexiconCount: 0 };
@@ -154,6 +170,17 @@ export default function Dashboard() {
         entries={recentData?.recentActivity ?? []}
         isLoading={recentLoading}
       />
+
+      {/* Rebuild Activity Button */}
+      <div className="flex justify-center">
+        <button
+          onClick={() => populateActivity.mutate()}
+          disabled={populateActivity.isPending}
+          className="text-xs text-zinc-400 hover:text-zinc-600 transition-colors disabled:opacity-50"
+        >
+          {populateActivity.isPending ? "Rebuilding..." : "Rebuild activity from records"}
+        </button>
+      </div>
     </div>
   );
 }

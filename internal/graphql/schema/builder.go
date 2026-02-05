@@ -156,7 +156,10 @@ func (b *Builder) buildSubscriptionType() *graphql.Object {
 				},
 			},
 			Resolve: func(p graphql.ResolveParams) (interface{}, error) {
-				// This is called for each event - just return the event
+				// Extract recordEvents from the root object passed by subscription handler
+				if m, ok := p.Source.(map[string]interface{}); ok {
+					return m["recordEvents"], nil
+				}
 				return p.Source, nil
 			},
 		},

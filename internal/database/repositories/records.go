@@ -421,7 +421,11 @@ func scanRecords(rows *sql.Rows) ([]*Record, error) {
 		if err := rows.Scan(&rec.URI, &rec.CID, &rec.DID, &rec.Collection, &rec.JSON, &indexedAtStr, &rec.RKey); err != nil {
 			return nil, err
 		}
+		// Try RFC3339 first, then SQLite format
 		rec.IndexedAt, _ = time.Parse(time.RFC3339, indexedAtStr)
+		if rec.IndexedAt.IsZero() {
+			rec.IndexedAt, _ = time.Parse("2006-01-02 15:04:05", indexedAtStr)
+		}
 		records = append(records, &rec)
 	}
 	return records, rows.Err()

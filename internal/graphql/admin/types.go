@@ -282,6 +282,10 @@ var ActivityEntryType = graphql.NewObject(graphql.ObjectConfig{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Actor DID",
 		},
+		"rkey": &graphql.Field{
+			Type:        graphql.String,
+			Description: "Record key",
+		},
 		"status": &graphql.Field{
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "Processing status",

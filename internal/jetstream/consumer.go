@@ -48,6 +48,12 @@ type Consumer struct {
 	stats      Stats
 	statsMu    sync.RWMutex
 	statsStart time.Time
+
+	// For reconnection
+	ctx       context.Context
+	ctxCancel context.CancelFunc
+	clientMu  sync.Mutex
+	running   bool
 }
 
 // Stats tracks consumer statistics.
@@ -83,9 +89,71 @@ func NewConsumer(
 	}
 }
 
-// Start begins consuming events from Jetstream.
+// Start begins consuming events from Jetstream with automatic reconnection.
 func (c *Consumer) Start(ctx context.Context) error {
-	// Load cursor from database
+	c.clientMu.Lock()
+	c.ctx, c.ctxCancel = context.WithCancel(ctx)
+	c.running = true
+	c.clientMu.Unlock()
+
+	// Reconnection loop with exponential backoff
+	backoff := time.Second
+	maxBackoff := 2 * time.Minute
+
+	for {
+		err := c.startInternal(c.ctx)
+
+		// Check if we should stop (context cancelled)
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		default:
+		}
+
+		// If error is nil, connection closed gracefully (shouldn't happen in normal operation)
+		// but we still try to reconnect
+		if err != nil {
+			slog.Error("Jetstream connection lost, will reconnect",
+				"error", err,
+				"backoff", backoff,
+			)
+		} else {
+			slog.Warn("Jetstream connection closed unexpectedly, will reconnect",
+				"backoff", backoff,
+			)
+		}
+
+		// Wait before reconnecting
+		select {
+		case <-c.ctx.Done():
+			return c.ctx.Err()
+		case <-time.After(backoff):
+		}
+
+		// Exponential backoff with cap
+		backoff = backoff * 2
+		if backoff > maxBackoff {
+			backoff = maxBackoff
+		}
+
+		// Reset cursorDone channel for new connection
+		c.cursorDone = make(chan struct{})
+
+		slog.Info("Attempting to reconnect to Jetstream...")
+	}
+}
+
+// startInternal does the actual connection and event processing.
+func (c *Consumer) startInternal(ctx context.Context) error {
+	// Clean up old client if exists (for reconnection scenarios)
+	c.clientMu.Lock()
+	if c.client != nil {
+		c.client.Stop()
+		c.client = nil
+	}
+	c.clientMu.Unlock()
+
+	// Load cursor from database (fresh load on each connection attempt)
 	cursor, err := c.loadCursor(ctx)
 	if err != nil {
 		slog.Warn("Failed to load cursor, starting from live", "error", err)
@@ -94,12 +162,14 @@ func (c *Consumer) Start(ctx context.Context) error {
 	}
 
 	// Create client
+	c.clientMu.Lock()
 	c.client = NewClient(ClientConfig{
 		URL:           c.config.JetstreamURL,
 		Collections:   c.config.Collections,
 		Cursor:        cursor,
 		DisableCursor: c.config.DisableCursor,
 	})
+	c.clientMu.Unlock()
 
 	// Connect
 	if err := c.client.Connect(ctx); err != nil {
@@ -120,10 +190,73 @@ func (c *Consumer) Start(ctx context.Context) error {
 
 // Stop stops the consumer.
 func (c *Consumer) Stop() {
-	close(c.cursorDone)
+	c.clientMu.Lock()
+	defer c.clientMu.Unlock()
+
+	c.running = false
+	if c.ctxCancel != nil {
+		c.ctxCancel()
+	}
+	select {
+	case <-c.cursorDone:
+		// Already closed
+	default:
+		close(c.cursorDone)
+	}
 	if c.client != nil {
 		c.client.Stop()
 	}
+}
+
+// UpdateCollections updates the subscribed collections and reconnects.
+func (c *Consumer) UpdateCollections(collections []string) error {
+	c.clientMu.Lock()
+	wasRunning := c.running
+	oldClient := c.client
+	c.clientMu.Unlock()
+
+	if !wasRunning {
+		// Just update config, will be used on next Start
+		c.config.Collections = collections
+		slog.Info("Updated Jetstream collections (not running)", "collections", collections)
+		return nil
+	}
+
+	slog.Info("Updating Jetstream collections, reconnecting...", "collections", collections)
+
+	// Stop old client
+	if oldClient != nil {
+		oldClient.Stop()
+	}
+
+	// Update config
+	c.config.Collections = collections
+
+	// Reset cursor done channel for new connection
+	c.cursorDone = make(chan struct{})
+
+	// Create new context
+	c.clientMu.Lock()
+	if c.ctxCancel != nil {
+		c.ctxCancel()
+	}
+	c.ctx, c.ctxCancel = context.WithCancel(context.Background())
+	ctx := c.ctx
+	c.clientMu.Unlock()
+
+	// Start in background
+	go func() {
+		if err := c.startInternal(ctx); err != nil {
+			slog.Error("Failed to reconnect Jetstream", "error", err)
+		}
+	}()
+
+	return nil
+}
+
+// Collections returns the currently subscribed collections.
+func (c *Consumer) Collections() []string {
+	return c.config.Collections
 }
 
 // Stats returns the current statistics.
@@ -177,8 +310,9 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 	commit := event.Commit
 	uri := commit.URI(event.DID)
 
-	// Convert event timestamp (microseconds) to time.Time
-	eventTime := time.UnixMicro(event.TimeUS)
+	// Use current time for activity logging (when we processed the event)
+	// The event's original timestamp is stored in the event_json
+	processedAt := time.Now()
 
 	// Log activity if repository is available
 	var activityID int64
@@ -186,10 +320,11 @@ func (c *Consumer) handleCommit(ctx context.Context, event *Event) error {
 		var err error
 		activityID, err = c.activityRepo.LogActivity(
 			ctx,
-			eventTime,
+			processedAt,
 			string(commit.Operation),
 			commit.Collection,
 			event.DID,
+			commit.RKey,
 			string(commit.Record),
 		)
 		if err != nil {

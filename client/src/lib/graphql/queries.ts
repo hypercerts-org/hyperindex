@@ -57,6 +57,7 @@ export const GET_RECENT_ACTIVITY = gql`
       operation
       collection
       did
+      rkey
       status
       errorMessage
     }

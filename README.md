@@ -1,6 +1,10 @@
+<p align="center">
+  <img src="hypergoat.png" alt="Hypergoat" width="600">
+</p>
+
 # Hypergoat
 
-**An AT Protocol AppView server that indexes records and exposes them via GraphQL**
+**A Go AT Protocol AppView server that indexes records and exposes them via GraphQL**
 
 Hypergoat connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
 
@@ -97,6 +101,10 @@ query {
 | `/graphiql/admin` | GraphQL playground (admin API) |
 | `/health` | Health check |
 | `/stats` | Server statistics |
+| `/.well-known/oauth-authorization-server` | OAuth 2.0 server metadata |
+| `/oauth/authorize` | OAuth authorization endpoint |
+| `/oauth/token` | OAuth token endpoint |
+| `/oauth/jwks` | JSON Web Key Set |
 
 ## Configuration
 

@@ -545,6 +545,46 @@ func run() error {
 		slog.Info("Jetstream consumer disabled (no collections - register lexicons or set JETSTREAM_COLLECTIONS)")
 	}
 
+	// Set up lexicon change callback for dynamic Jetstream updates
+	if adminHandler != nil {
+		adminHandler.Resolver().SetLexiconChangeCallback(func(collections []string) error {
+			if jsConsumer == nil {
+				// Create consumer if it doesn't exist yet
+				jsURL := os.Getenv("JETSTREAM_URL")
+				if jsURL == "" {
+					jsURL = jetstream.DefaultJetstreamURL
+				}
+				disableCursor := os.Getenv("JETSTREAM_DISABLE_CURSOR") == "true"
+				activityRepo := repositories.NewJetstreamActivityRepository(db)
+
+				jsConsumer = jetstream.NewConsumer(
+					jetstream.ConsumerConfig{
+						JetstreamURL:  jsURL,
+						Collections:   collections,
+						DisableCursor: disableCursor,
+					},
+					recordsRepo,
+					actorsRepo,
+					configRepo,
+					activityRepo,
+				)
+
+				// Start consumer in background
+				go func() {
+					slog.Info("Starting Jetstream consumer (dynamic)",
+						"collections", collections,
+					)
+					if err := jsConsumer.Start(context.Background()); err != nil {
+						slog.Error("Jetstream consumer error", "error", err)
+					}
+				}()
+				return nil
+			}
+			return jsConsumer.UpdateCollections(collections)
+		})
+		slog.Info("Lexicon change callback configured for dynamic Jetstream updates")
+	}
+
 	// Run backfill if enabled
 	if os.Getenv("BACKFILL_ON_START") == "true" {
 		backfillCollections := os.Getenv("BACKFILL_COLLECTIONS")
@@ -651,11 +691,11 @@ func populateActivityFromRecords(
 ) (int64, error) {
 	var count int64
 	_, err := recordsRepo.IterateAll(ctx, 1000, func(rec *repositories.Record) error {
-		// Extract createdAt from the record JSON
-		timestamp := extractCreatedAtFromJSON(rec.JSON)
+		// Extract createdAt from the record JSON, fall back to IndexedAt
+		timestamp := extractCreatedAtFromJSON(rec.JSON, rec.IndexedAt)
 
 		// Log as a successful create operation
-		_, err := activityRepo.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.JSON, "success")
+		_, err := activityRepo.LogActivityWithStatus(ctx, timestamp, "create", rec.Collection, rec.DID, rec.RKey, rec.JSON, "success")
 		if err != nil {
 			return nil // Continue on error
 		}
@@ -666,23 +706,24 @@ func populateActivityFromRecords(
 }
 
 // extractCreatedAtFromJSON extracts the createdAt timestamp from a record's JSON.
-func extractCreatedAtFromJSON(recordJSON string) time.Time {
+// Falls back to the provided fallback time if not found.
+func extractCreatedAtFromJSON(recordJSON string, fallback time.Time) time.Time {
 	var data map[string]interface{}
 	if err := json.Unmarshal([]byte(recordJSON), &data); err != nil {
-		return time.Now()
+		return fallback
 	}
 
-	createdAt, ok := data["createdAt"].(string)
-	if !ok {
-		return time.Now()
-	}
-
-	t, err := time.Parse(time.RFC3339, createdAt)
-	if err != nil {
-		t, err = time.Parse("2006-01-02T15:04:05", createdAt)
-		if err != nil {
-			return time.Now()
+	// Try common timestamp field names
+	for _, field := range []string{"createdAt", "$createdAt", "created_at", "timestamp", "indexedAt"} {
+		if val, ok := data[field].(string); ok {
+			if t, err := time.Parse(time.RFC3339, val); err == nil {
+				return t
+			}
+			if t, err := time.Parse("2006-01-02T15:04:05", val); err == nil {
+				return t
+			}
 		}
 	}
-	return t
+
+	return fallback
 }
