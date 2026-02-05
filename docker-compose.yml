@@ -1,0 +1,20 @@
+version: '3.8'
+
+services:
+  hypergoat:
+    build: .
+    ports:
+      - "8080:8080"
+    environment:
+      - HOST=0.0.0.0
+      - PORT=8080
+      - DATABASE_URL=sqlite:/app/data/hypergoat.db
+      - SECRET_KEY_BASE=${SECRET_KEY_BASE:-development-secret-key-change-in-production-64chars}
+      - EXTERNAL_BASE_URL=${EXTERNAL_BASE_URL:-http://localhost:8080}
+      - OAUTH_LOOPBACK_MODE=${OAUTH_LOOPBACK_MODE:-true}
+    volumes:
+      - hypergoat-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  hypergoat-data:

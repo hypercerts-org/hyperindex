@@ -1,0 +1,17 @@
+DROP TABLE IF EXISTS admin_session;
+DROP TABLE IF EXISTS oauth_authorization_code;
+DROP TABLE IF EXISTS oauth_atp_request;
+DROP TABLE IF EXISTS oauth_atp_session;
+DROP TABLE IF EXISTS oauth_auth_request;
+DROP TABLE IF EXISTS oauth_dpop_jti;
+DROP TABLE IF EXISTS oauth_dpop_nonce;
+DROP TABLE IF EXISTS oauth_par_request;
+DROP TABLE IF EXISTS oauth_refresh_token;
+DROP TABLE IF EXISTS oauth_access_token;
+DROP TABLE IF EXISTS oauth_client;
+DROP TABLE IF EXISTS jetstream_cursor;
+DROP TABLE IF EXISTS jetstream_activity;
+DROP TABLE IF EXISTS config;
+DROP TABLE IF EXISTS lexicon;
+DROP TABLE IF EXISTS actor;
+DROP TABLE IF EXISTS record;
