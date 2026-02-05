@@ -15,15 +15,23 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/GainForest/hypergoat/internal/backfill"
 	"github.com/GainForest/hypergoat/internal/config"
 	"github.com/GainForest/hypergoat/internal/database/migrations"
 	"github.com/GainForest/hypergoat/internal/database/repositories"
+	hgraphql "github.com/GainForest/hypergoat/internal/graphql"
+	"github.com/GainForest/hypergoat/internal/graphql/resolver"
+	"github.com/GainForest/hypergoat/internal/graphql/subscription"
+	"github.com/GainForest/hypergoat/internal/jetstream"
+	"github.com/GainForest/hypergoat/internal/lexicon"
 	"github.com/GainForest/hypergoat/internal/server"
 )
 
@@ -32,6 +40,32 @@ func main() {
 		slog.Error("Server failed", "error", err)
 		os.Exit(1)
 	}
+}
+
+// loadLexiconsFromDir loads all lexicon JSON files from a directory tree.
+func loadLexiconsFromDir(dir string, registry *lexicon.Registry) error {
+	return filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() || !strings.HasSuffix(path, ".json") {
+			return nil
+		}
+
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return err
+		}
+
+		lex, parseErr := lexicon.ParseBytes(data)
+		if parseErr != nil {
+			// Skip non-lexicon JSON files
+			return nil //nolint:nilerr // intentionally skip parse errors
+		}
+
+		registry.Register(lex)
+		return nil
+	})
 }
 
 func run() error {
@@ -157,17 +191,127 @@ func run() error {
 		})
 	})
 
-	// Placeholder for GraphQL endpoint
-	r.Route("/graphql", func(r chi.Router) {
-		r.HandleFunc("/", func(w http.ResponseWriter, req *http.Request) {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotImplemented)
-			_ = json.NewEncoder(w).Encode(map[string]string{
-				"error":   "NotImplemented",
-				"message": "GraphQL endpoint is not yet implemented",
-			})
-		})
-	})
+	// Load lexicons and set up GraphQL endpoint
+	registry := lexicon.NewRegistry()
+	lexiconDir := os.Getenv("LEXICON_DIR")
+	if lexiconDir == "" {
+		// Default to testdata/lexicons for development
+		lexiconDir = "testdata/lexicons"
+	}
+
+	if _, err := os.Stat(lexiconDir); err == nil {
+		if err := loadLexiconsFromDir(lexiconDir, registry); err != nil {
+			slog.Warn("Failed to load lexicons from directory", "dir", lexiconDir, "error", err)
+		} else {
+			slog.Info("Loaded lexicons", "count", registry.Count(), "dir", lexiconDir)
+		}
+	}
+
+	// Create GraphQL handler with database repositories
+	repos := &resolver.Repositories{
+		Records:  recordsRepo,
+		Actors:   actorsRepo,
+		Lexicons: lexiconsRepo,
+	}
+	graphqlHandler, err := hgraphql.NewHandler(registry, repos)
+	if err != nil {
+		slog.Error("Failed to create GraphQL handler", "error", err)
+	} else {
+		r.Handle("/graphql", graphqlHandler)
+		r.Handle("/graphql/", graphqlHandler)
+		slog.Info("GraphQL endpoint enabled", "path", "/graphql")
+
+		// Add WebSocket subscription endpoint
+		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema())
+		r.Handle("/graphql/ws", subscriptionHandler)
+		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
+	}
+
+	// Start Jetstream consumer if collections are configured
+	var jsConsumer *jetstream.Consumer
+	jsCollections := os.Getenv("JETSTREAM_COLLECTIONS")
+	if jsCollections != "" {
+		collections := jetstream.ParseCollections(jsCollections)
+		jsURL := os.Getenv("JETSTREAM_URL")
+		if jsURL == "" {
+			jsURL = jetstream.DefaultJetstreamURL
+		}
+		disableCursor := os.Getenv("JETSTREAM_DISABLE_CURSOR") == "true"
+
+		jsConsumer = jetstream.NewConsumer(
+			jetstream.ConsumerConfig{
+				JetstreamURL:  jsURL,
+				Collections:   collections,
+				DisableCursor: disableCursor,
+			},
+			recordsRepo,
+			actorsRepo,
+			configRepo,
+		)
+
+		// Start consumer in background
+		jsCtx, jsCancel := context.WithCancel(context.Background())
+		defer jsCancel()
+
+		go func() {
+			slog.Info("Starting Jetstream consumer",
+				"url", jsURL,
+				"collections", collections,
+				"disable_cursor", disableCursor,
+			)
+			if err := jsConsumer.Start(jsCtx); err != nil {
+				slog.Error("Jetstream consumer error", "error", err)
+			}
+		}()
+	} else {
+		slog.Info("Jetstream consumer disabled (set JETSTREAM_COLLECTIONS to enable)")
+	}
+
+	// Run backfill if enabled
+	if os.Getenv("BACKFILL_ON_START") == "true" {
+		backfillCollections := os.Getenv("BACKFILL_COLLECTIONS")
+		if backfillCollections == "" {
+			backfillCollections = jsCollections // Default to jetstream collections
+		}
+
+		if backfillCollections != "" {
+			collections := backfill.ParseCollections(backfillCollections)
+			relayURL := os.Getenv("BACKFILL_RELAY_URL")
+			plcURL := os.Getenv("BACKFILL_PLC_URL")
+
+			bfConfig := backfill.DefaultConfig()
+			bfConfig.Collections = collections
+			if relayURL != "" {
+				bfConfig.RelayURL = relayURL
+			}
+			if plcURL != "" {
+				bfConfig.PLCURL = plcURL
+			}
+
+			backfiller := backfill.NewBackfiller(bfConfig, recordsRepo, actorsRepo)
+
+			// Run backfill in background
+			go func() {
+				slog.Info("Starting backfill operation",
+					"collections", collections,
+					"relay", bfConfig.RelayURL,
+				)
+				stats, err := backfiller.Run(context.Background())
+				if err != nil {
+					slog.Error("Backfill failed", "error", err)
+				} else {
+					slog.Info("Backfill completed",
+						"repos_discovered", stats.ReposDiscovered,
+						"repos_processed", stats.ReposProcessed,
+						"records_inserted", stats.RecordsInserted,
+						"duration", stats.Duration(),
+					)
+				}
+			}()
+		} else {
+			slog.Warn("BACKFILL_ON_START=true but no collections specified")
+		}
+	}
 
 	// Create HTTP server
 	srv := &http.Server{
@@ -199,6 +343,11 @@ func run() error {
 	}
 
 	slog.Info("Shutting down server...")
+
+	// Stop Jetstream consumer
+	if jsConsumer != nil {
+		jsConsumer.Stop()
+	}
 
 	// Graceful shutdown with timeout
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
