@@ -758,7 +758,18 @@ func (sm *SubscriptionManager) HandleWebSocket(w http.ResponseWriter, r *http.Re
 
 ---
 
-## Phase 5: OAuth & Authentication (Week 5-6)
+## Phase 5: OAuth & Authentication (Week 5-6) ✅ COMPLETE
+
+> **Implementation Notes:**
+> - OAuth repositories: `internal/database/repositories/oauth_*.go` (10 tables)
+> - DID resolver: `internal/oauth/did.go`, `internal/oauth/did_cache.go`
+> - PKCE: `internal/oauth/pkce.go` (RFC 7636)
+> - DPoP: `internal/oauth/dpop.go` (RFC 9449)
+> - OAuth server: `internal/oauth/server.go`, `internal/oauth/token_generator.go`
+> - AT Protocol bridge: `internal/oauth/bridge.go`
+> - Auth middleware: `internal/oauth/middleware.go`
+> - HTTP handlers: `internal/server/oauth_handlers.go`
+> - 92+ tests passing
 
 ### 5.1 OAuth Repositories
 
@@ -903,7 +914,17 @@ func ExtractAuthContext(ctx context.Context) (*AuthContext, bool)
 
 ---
 
-## Phase 6: Backfill & Admin (Week 6-7)
+## Phase 6: Backfill & Admin (Week 6-7) ✅ COMPLETE
+
+> **Implementation Notes:**
+> - Backfill: `internal/backfill/backfill.go`, `internal/backfill/client.go` (from Phase 4)
+> - Admin repositories: `internal/database/repositories/jetstream_activity.go`, `labels.go`, `label_definitions.go`, `label_preferences.go`, `reports.go`
+> - Admin GraphQL types: `internal/graphql/admin/types.go` (594 lines)
+> - Admin resolvers: `internal/graphql/admin/resolvers.go` (563 lines)
+> - Admin schema: `internal/graphql/admin/schema.go` (487 lines)
+> - Admin handler: `internal/graphql/admin/handler.go` (141 lines)
+> - Background workers: `internal/workers/activity_cleanup.go`, `backfill_state.go`
+> - Tests: `internal/graphql/admin/handler_test.go` (9 tests passing)
 
 ### 6.1 Backfill Configuration
 
@@ -1049,7 +1070,17 @@ func (ac *ActivityCleanup) Start(ctx context.Context)
 
 ---
 
-## Phase 7: Polish & Integration (Week 7-8)
+## Phase 7: Server Integration & Complete OAuth (Week 7-8) 🔄 IN PROGRESS
+
+> **Current Tasks:** See `bd ready` for available work. Epic: `adventure-n96`
+>
+> **Focus Areas:**
+> - Wire up OAuth discovery endpoints (/.well-known/*)
+> - Wire up OAuth flow endpoints (/oauth/*)
+> - Add missing admin mutations (uploadLexicons, triggerBackfill, etc.)
+> - Add GraphiQL playgrounds (CDN-hosted)
+> - Start background workers on server init
+> - Integration tests
 
 ### 7.1 HTTP Router Setup
 

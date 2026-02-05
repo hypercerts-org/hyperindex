@@ -455,6 +455,163 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					return b.resolver.ResolveReport(p.Context, int64(id), action, labelValPtr, resolverDID)
 				},
 			},
+			"uploadLexicons": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Int),
+				Description: "Upload lexicons from a base64-encoded ZIP file (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"zipBase64": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Base64-encoded ZIP file containing lexicon JSON files",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					zipBase64, _ := p.Args["zipBase64"].(string)
+					return b.resolver.UploadLexicons(p.Context, zipBase64)
+				},
+			},
+			"triggerBackfill": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Trigger a full backfill of all known actors (admin only)",
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					return b.resolver.TriggerBackfill(p.Context)
+				},
+			},
+			"backfillActor": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Backfill a single actor by DID (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"did": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The DID of the actor to backfill",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					did, _ := p.Args["did"].(string)
+					return b.resolver.BackfillActor(p.Context, did)
+				},
+			},
+			"createOAuthClient": &graphql.Field{
+				Type:        graphql.NewNonNull(OAuthClientType),
+				Description: "Create a new OAuth client (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"clientName": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Human-readable client name",
+					},
+					"clientType": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Client type: 'public' or 'confidential'",
+					},
+					"redirectUris": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+						Description: "List of allowed redirect URIs",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					clientName, _ := p.Args["clientName"].(string)
+					clientType, _ := p.Args["clientType"].(string)
+					redirectURIsRaw, _ := p.Args["redirectUris"].([]interface{})
+					redirectURIs := make([]string, len(redirectURIsRaw))
+					for i, uri := range redirectURIsRaw {
+						redirectURIs[i], _ = uri.(string)
+					}
+					return b.resolver.CreateOAuthClient(p.Context, clientName, clientType, redirectURIs)
+				},
+			},
+			"updateOAuthClient": &graphql.Field{
+				Type:        graphql.NewNonNull(OAuthClientType),
+				Description: "Update an existing OAuth client (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"clientId": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Client ID to update",
+					},
+					"clientName": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "New client name",
+					},
+					"redirectUris": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(graphql.String))),
+						Description: "New list of allowed redirect URIs",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					clientID, _ := p.Args["clientId"].(string)
+					clientName, _ := p.Args["clientName"].(string)
+					redirectURIsRaw, _ := p.Args["redirectUris"].([]interface{})
+					redirectURIs := make([]string, len(redirectURIsRaw))
+					for i, uri := range redirectURIsRaw {
+						redirectURIs[i], _ = uri.(string)
+					}
+					return b.resolver.UpdateOAuthClient(p.Context, clientID, clientName, redirectURIs)
+				},
+			},
+			"deleteOAuthClient": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Delete an OAuth client (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"clientId": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Client ID to delete",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					clientID, _ := p.Args["clientId"].(string)
+					return b.resolver.DeleteOAuthClient(p.Context, clientID)
+				},
+			},
+			"addAdmin": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Add a DID to the admin list (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"did": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "DID to add as admin",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					did, _ := p.Args["did"].(string)
+					return b.resolver.AddAdmin(p.Context, did)
+				},
+			},
+			"removeAdmin": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Remove a DID from the admin list (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"did": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "DID to remove from admin list",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					did, _ := p.Args["did"].(string)
+					return b.resolver.RemoveAdmin(p.Context, did)
+				},
+			},
 		},
 	})
 }

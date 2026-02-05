@@ -10,25 +10,46 @@ Use 'bd' for task tracking
 | Phase 2 | Lexicon Parsing & GraphQL Core | ✅ Complete |
 | Phase 3 | GraphQL API (schema, resolvers) | ✅ Complete |
 | Phase 4 | Real-time Features (Jetstream, Subscriptions, Backfill) | ✅ Complete |
-| **Phase 5** | **OAuth & Authentication** | 🔄 In Progress (55%) |
-| Phase 6 | Admin GraphQL & Management | Pending |
-| Phase 7 | Polish & Integration | Pending |
+| Phase 5 | OAuth & Authentication | ✅ Complete |
+| Phase 6 | Admin GraphQL & Management | ✅ Complete |
+| **Phase 7** | **Server Integration & Complete OAuth** | 🔄 In Progress |
 
-### Phase 5 Progress
+### Phase 7 Progress
 
 | Task | Description | Status |
 |------|-------------|--------|
-| 8aj.1 | OAuth database repositories (10 tables) | ✅ Done |
-| 8aj.2 | DID resolver (did:plc, did:web) | ✅ Done |
-| 8aj.3 | DID cache with TTL | ✅ Done |
-| 8aj.4 | PKCE implementation | ✅ Done |
-| 8aj.5 | DPoP proof-of-possession | ✅ Done |
-| 8aj.6 | OAuth server core | Pending |
-| 8aj.7 | AT Protocol bridge for PDS auth | Pending |
-| 8aj.8 | Auth middleware | Pending |
-| 8aj.9 | OAuth HTTP endpoints | Pending |
+| 7.1 | OAuth discovery endpoints (.well-known/*) | 🔲 Ready |
+| 7.2 | OAuth flow endpoints (/oauth/*) | 🔲 Blocked by 7.1 |
+| 7.3 | OAuth client registration (/oauth/register) | 🔲 Blocked by 7.2 |
+| 7.4 | OAuth PAR endpoint (/oauth/par) | 🔲 Blocked by 7.2 |
+| 7.5 | OAuth DPoP nonce endpoint | 🔲 Blocked by 7.2 |
+| 7.6 | OAuth client metadata (dynamic) | 🔲 Ready |
+| 7.7 | Admin GraphQL handler wiring | 🔲 Blocked by 7.2 |
+| 7.8 | Missing admin mutations | 🔲 Blocked by 7.7 |
+| 7.9 | GraphiQL playgrounds (CDN) | 🔲 Blocked by 7.7 |
+| 7.10 | Start background workers | 🔲 Blocked by 7.7 |
+| 7.11 | Integration tests | 🔲 Blocked by 7.8 |
 
-**Next Steps:** Run `bd ready` to see available work. Phase 5 OAuth epic: `hypergoat-8aj`
+**Next Steps:** Run `bd ready` to see available work. Phase 7 epic: `adventure-n96`
+
+### What Was Completed
+
+**Phase 5 (OAuth):**
+- OAuth database repositories (10 tables)
+- DID resolver (did:plc, did:web) with caching
+- PKCE and DPoP implementations
+- OAuth server core (token generation, scopes, errors)
+- AT Protocol bridge for PDS authentication
+- Auth middleware with JWT validation
+- OAuth HTTP handlers (authorize, callback, token, revoke)
+
+**Phase 6 (Admin):**
+- Admin database repositories (jetstream_activity, labels, label_definitions, label_preferences, reports)
+- Admin GraphQL types and enums
+- Admin query and mutation resolvers
+- Admin HTTP handler with OAuth auth
+- Background workers (activity cleanup, backfill state)
+- Integration tests (9 tests passing)
 
 ## Project Overview
 
@@ -221,19 +242,40 @@ See `.env.example` for all configuration options. Key variables:
 - `PLC_DIRECTORY_URL` - DID resolution (default: https://plc.directory)
 - `EXTERNAL_BASE_URL` - Public URL for OAuth callbacks
 
-### OAuth Package Structure (`internal/oauth/`)
+### Package Structure
 
 ```
-internal/oauth/
-├── types.go          # OAuth type definitions (Client, AccessToken, etc.)
-├── pkce.go           # PKCE implementation (RFC 7636)
-├── pkce_test.go      # PKCE tests
-├── dpop.go           # DPoP proof-of-possession (RFC 9449)
-├── dpop_test.go      # DPoP tests
-├── did.go            # DID resolver (did:plc, did:web)
-├── did_test.go       # DID tests
-├── did_cache.go      # DID document caching with TTL
-└── did_cache_test.go # Cache tests
+internal/oauth/                    # OAuth & Authentication
+├── types.go                       # OAuth type definitions
+├── pkce.go, pkce_test.go          # PKCE (RFC 7636)
+├── dpop.go, dpop_test.go          # DPoP proof-of-possession (RFC 9449)
+├── did.go, did_test.go            # DID resolver (did:plc, did:web)
+├── did_cache.go, did_cache_test.go # DID caching with TTL
+├── server.go                      # OAuth server core
+├── token_generator.go             # Token generation
+├── scopes.go, scopes_test.go      # Scope validation
+├── errors.go                      # OAuth error types
+├── bridge.go, bridge_test.go      # AT Protocol bridge
+└── middleware.go, middleware_test.go # Auth middleware
+
+internal/graphql/admin/            # Admin GraphQL API
+├── types.go                       # GraphQL types and enums
+├── resolvers.go                   # Query/mutation resolvers
+├── schema.go                      # Schema builder
+├── handler.go                     # HTTP handler
+└── handler_test.go                # Tests (9 tests)
+
+internal/workers/                  # Background Workers
+├── activity_cleanup.go            # Hourly cleanup (7-day retention)
+└── backfill_state.go              # Backfill progress tracking
+
+internal/database/repositories/    # Data Access Layer
+├── oauth_*.go                     # 10 OAuth repositories
+├── jetstream_activity.go          # Activity logging
+├── labels.go                      # Content labels
+├── label_definitions.go           # Label types
+├── label_preferences.go           # User preferences
+└── reports.go                     # Moderation reports
 ```
 
 ## Reference

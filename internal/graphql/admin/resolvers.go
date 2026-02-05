@@ -1,16 +1,23 @@
 package admin
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
+	"crypto/rand"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
+	"github.com/GainForest/hypergoat/internal/oauth"
 )
 
 // Repositories holds the database repositories needed by the admin API.
@@ -27,11 +34,15 @@ type Repositories struct {
 	Reports          *repositories.ReportsRepository
 }
 
+// BackfillCallback is called when backfill is triggered.
+type BackfillCallback func(ctx context.Context, did string) error
+
 // Resolver provides methods for resolving admin GraphQL queries and mutations.
 type Resolver struct {
-	repos          *Repositories
-	backfillActive bool
-	domainDID      string // The DID of this labeler instance
+	repos            *Repositories
+	backfillActive   bool
+	domainDID        string // The DID of this labeler instance
+	backfillCallback BackfillCallback
 }
 
 // NewResolver creates a new admin resolver.
@@ -40,6 +51,11 @@ func NewResolver(repos *Repositories, domainDID string) *Resolver {
 		repos:     repos,
 		domainDID: domainDID,
 	}
+}
+
+// SetBackfillCallback sets the callback for backfill operations.
+func (r *Resolver) SetBackfillCallback(cb BackfillCallback) {
+	r.backfillCallback = cb
 }
 
 // =============================================================================
@@ -166,6 +182,279 @@ func (r *Resolver) OAuthClients(ctx context.Context) ([]map[string]interface{}, 
 	}
 
 	return result, nil
+}
+
+// UploadLexicons extracts lexicons from a base64-encoded ZIP file.
+func (r *Resolver) UploadLexicons(ctx context.Context, zipBase64 string) (int, error) {
+	// Decode base64
+	zipData, err := base64.StdEncoding.DecodeString(zipBase64)
+	if err != nil {
+		return 0, fmt.Errorf("invalid base64 data: %w", err)
+	}
+
+	// Open ZIP reader
+	zipReader, err := zip.NewReader(bytes.NewReader(zipData), int64(len(zipData)))
+	if err != nil {
+		return 0, fmt.Errorf("invalid ZIP file: %w", err)
+	}
+
+	// Process each file
+	count := 0
+	for _, file := range zipReader.File {
+		// Skip directories and non-JSON files
+		if file.FileInfo().IsDir() || !strings.HasSuffix(file.Name, ".json") {
+			continue
+		}
+
+		// Open and read file
+		rc, err := file.Open()
+		if err != nil {
+			continue
+		}
+
+		data, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			continue
+		}
+
+		// Parse JSON to extract lexicon ID
+		var lexicon struct {
+			ID string `json:"id"`
+		}
+		if err := json.Unmarshal(data, &lexicon); err != nil {
+			continue
+		}
+
+		if lexicon.ID == "" {
+			continue
+		}
+
+		// Upsert lexicon
+		if err := r.repos.Lexicons.Upsert(ctx, lexicon.ID, string(data)); err != nil {
+			return count, fmt.Errorf("failed to save lexicon %s: %w", lexicon.ID, err)
+		}
+		count++
+	}
+
+	return count, nil
+}
+
+// TriggerBackfill starts a full backfill process.
+func (r *Resolver) TriggerBackfill(ctx context.Context) (bool, error) {
+	if r.backfillActive {
+		return false, fmt.Errorf("backfill already in progress")
+	}
+	r.backfillActive = true
+	// The actual backfill is handled by the background worker that checks this flag
+	return true, nil
+}
+
+// BackfillActor queues a single actor for backfill.
+func (r *Resolver) BackfillActor(ctx context.Context, did string) (bool, error) {
+	// Validate DID format
+	if !strings.HasPrefix(did, "did:") {
+		return false, fmt.Errorf("invalid DID format")
+	}
+
+	// Ensure actor exists (creates if not)
+	if err := r.repos.Actors.Upsert(ctx, did, ""); err != nil {
+		return false, fmt.Errorf("failed to register actor: %w", err)
+	}
+
+	// Trigger backfill callback if registered
+	if r.backfillCallback != nil {
+		if err := r.backfillCallback(ctx, did); err != nil {
+			return false, fmt.Errorf("failed to trigger backfill: %w", err)
+		}
+	}
+
+	return true, nil
+}
+
+// CreateOAuthClient creates a new OAuth client.
+func (r *Resolver) CreateOAuthClient(ctx context.Context, clientName, clientType string, redirectURIs []string) (map[string]interface{}, error) {
+	// Generate client ID
+	clientIDBytes := make([]byte, 16)
+	if _, err := rand.Read(clientIDBytes); err != nil {
+		return nil, fmt.Errorf("failed to generate client ID: %w", err)
+	}
+	clientID := hex.EncodeToString(clientIDBytes)
+
+	// Generate client secret for confidential clients
+	var clientSecret *string
+	ct := oauth.ClientType(clientType)
+	if ct == oauth.ClientConfidential {
+		secretBytes := make([]byte, 32)
+		if _, err := rand.Read(secretBytes); err != nil {
+			return nil, fmt.Errorf("failed to generate client secret: %w", err)
+		}
+		secret := hex.EncodeToString(secretBytes)
+		clientSecret = &secret
+	}
+
+	now := time.Now().Unix()
+	client := &oauth.Client{
+		ClientID:                clientID,
+		ClientSecret:            clientSecret,
+		ClientName:              clientName,
+		RedirectURIs:            redirectURIs,
+		GrantTypes:              []oauth.GrantType{oauth.GrantAuthorizationCode, oauth.GrantRefreshToken},
+		ResponseTypes:           []oauth.ResponseType{oauth.ResponseCode},
+		TokenEndpointAuthMethod: oauth.AuthClientSecret,
+		ClientType:              ct,
+		CreatedAt:               now,
+		UpdatedAt:               now,
+		Metadata:                "{}",
+		AccessTokenExpiration:   3600,       // 1 hour
+		RefreshTokenExpiration:  86400 * 30, // 30 days
+		RequireRedirectExact:    true,
+	}
+
+	if ct == oauth.ClientPublic {
+		client.TokenEndpointAuthMethod = oauth.AuthNone
+	}
+
+	if err := r.repos.OAuthClients.Insert(ctx, client); err != nil {
+		return nil, fmt.Errorf("failed to create OAuth client: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"clientId":     client.ClientID,
+		"clientName":   client.ClientName,
+		"clientType":   string(client.ClientType),
+		"redirectUris": client.RedirectURIs,
+		"createdAt":    time.Unix(client.CreatedAt, 0).Format(time.RFC3339),
+	}
+	if client.ClientSecret != nil {
+		result["clientSecret"] = *client.ClientSecret
+	}
+
+	return result, nil
+}
+
+// UpdateOAuthClient updates an existing OAuth client.
+func (r *Resolver) UpdateOAuthClient(ctx context.Context, clientID, clientName string, redirectURIs []string) (map[string]interface{}, error) {
+	// Get existing client
+	client, err := r.repos.OAuthClients.Get(ctx, clientID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get OAuth client: %w", err)
+	}
+	if client == nil {
+		return nil, fmt.Errorf("OAuth client not found")
+	}
+
+	// Update fields
+	client.ClientName = clientName
+	client.RedirectURIs = redirectURIs
+	client.UpdatedAt = time.Now().Unix()
+
+	if err := r.repos.OAuthClients.Update(ctx, client); err != nil {
+		return nil, fmt.Errorf("failed to update OAuth client: %w", err)
+	}
+
+	result := map[string]interface{}{
+		"clientId":     client.ClientID,
+		"clientName":   client.ClientName,
+		"clientType":   string(client.ClientType),
+		"redirectUris": client.RedirectURIs,
+		"createdAt":    time.Unix(client.CreatedAt, 0).Format(time.RFC3339),
+	}
+	if client.ClientSecret != nil {
+		result["clientSecret"] = *client.ClientSecret
+	}
+
+	return result, nil
+}
+
+// DeleteOAuthClient deletes an OAuth client.
+func (r *Resolver) DeleteOAuthClient(ctx context.Context, clientID string) (bool, error) {
+	// Don't allow deleting the admin client
+	if clientID == "admin" {
+		return false, fmt.Errorf("cannot delete the admin client")
+	}
+
+	if err := r.repos.OAuthClients.Delete(ctx, clientID); err != nil {
+		return false, fmt.Errorf("failed to delete OAuth client: %w", err)
+	}
+
+	return true, nil
+}
+
+// AddAdmin adds a DID to the admin list.
+func (r *Resolver) AddAdmin(ctx context.Context, did string) (bool, error) {
+	// Validate DID format
+	if !strings.HasPrefix(did, "did:") {
+		return false, fmt.Errorf("invalid DID format")
+	}
+
+	// Get current admin DIDs
+	adminDidsStr, _ := r.repos.Config.Get(ctx, "admin_dids")
+	var adminDids []string
+	if adminDidsStr != "" {
+		adminDids = strings.Split(adminDidsStr, ",")
+		for i := range adminDids {
+			adminDids[i] = strings.TrimSpace(adminDids[i])
+		}
+	}
+
+	// Check if already admin
+	for _, existingDID := range adminDids {
+		if existingDID == did {
+			return true, nil // Already an admin
+		}
+	}
+
+	// Add new admin
+	adminDids = append(adminDids, did)
+	newAdminDidsStr := strings.Join(adminDids, ",")
+
+	if err := r.repos.Config.Set(ctx, "admin_dids", newAdminDidsStr); err != nil {
+		return false, fmt.Errorf("failed to update admin_dids: %w", err)
+	}
+
+	return true, nil
+}
+
+// RemoveAdmin removes a DID from the admin list.
+func (r *Resolver) RemoveAdmin(ctx context.Context, did string) (bool, error) {
+	// Get current admin DIDs
+	adminDidsStr, _ := r.repos.Config.Get(ctx, "admin_dids")
+	if adminDidsStr == "" {
+		return false, fmt.Errorf("no admins configured")
+	}
+
+	adminDids := strings.Split(adminDidsStr, ",")
+	for i := range adminDids {
+		adminDids[i] = strings.TrimSpace(adminDids[i])
+	}
+
+	// Prevent removing the last admin
+	if len(adminDids) <= 1 {
+		return false, fmt.Errorf("cannot remove the last admin")
+	}
+
+	// Find and remove the DID
+	found := false
+	newAdminDids := make([]string, 0, len(adminDids)-1)
+	for _, existingDID := range adminDids {
+		if existingDID == did {
+			found = true
+		} else {
+			newAdminDids = append(newAdminDids, existingDID)
+		}
+	}
+
+	if !found {
+		return false, fmt.Errorf("DID is not an admin")
+	}
+
+	newAdminDidsStr := strings.Join(newAdminDids, ",")
+	if err := r.repos.Config.Set(ctx, "admin_dids", newAdminDidsStr); err != nil {
+		return false, fmt.Errorf("failed to update admin_dids: %w", err)
+	}
+
+	return true, nil
 }
 
 // ActivityBuckets returns aggregated activity data for the specified time range.

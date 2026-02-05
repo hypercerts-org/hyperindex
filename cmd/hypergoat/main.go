@@ -28,11 +28,14 @@ import (
 	"github.com/GainForest/hypergoat/internal/database/migrations"
 	"github.com/GainForest/hypergoat/internal/database/repositories"
 	hgraphql "github.com/GainForest/hypergoat/internal/graphql"
+	"github.com/GainForest/hypergoat/internal/graphql/admin"
 	"github.com/GainForest/hypergoat/internal/graphql/resolver"
 	"github.com/GainForest/hypergoat/internal/graphql/subscription"
 	"github.com/GainForest/hypergoat/internal/jetstream"
 	"github.com/GainForest/hypergoat/internal/lexicon"
+	"github.com/GainForest/hypergoat/internal/oauth"
 	"github.com/GainForest/hypergoat/internal/server"
+	"github.com/GainForest/hypergoat/internal/workers"
 )
 
 func main() {
@@ -191,6 +194,156 @@ func run() error {
 		})
 	})
 
+	// OAuth endpoints
+	oauthSigningKey, _ := oauth.GenerateDPoPKeyPair() // Generate ephemeral key if not configured
+	if cfg.OAuthSigningKey != "" {
+		if key, err := oauth.ParseDPoPKeyPair(cfg.OAuthSigningKey); err == nil {
+			oauthSigningKey = key
+		} else {
+			slog.Warn("Failed to parse OAuth signing key, using ephemeral key", "error", err)
+		}
+	}
+
+	oauthHandlers := server.NewOAuthHandlers(server.OAuthHandlerConfig{
+		ExternalBaseURL:             cfg.ExternalBaseURL,
+		ClientID:                    cfg.ExternalBaseURL + "/oauth-client-metadata.json",
+		CallbackURL:                 cfg.ExternalBaseURL + "/oauth/callback",
+		SigningKey:                  oauthSigningKey,
+		Issuer:                      cfg.ExternalBaseURL,
+		ScopesSupported:             []string{"atproto", "transition:generic", "transition:chat.bsky"},
+		AccessTokenExpiration:       3600,    // 1 hour
+		RefreshTokenExpiration:      1209600, // 14 days
+		AuthorizationCodeExpiration: 600,     // 10 minutes
+	}, db)
+
+	// OAuth discovery endpoints (/.well-known/*)
+	r.Get("/.well-known/oauth-authorization-server", oauthHandlers.HandleAuthorizationServerMetadata)
+	r.Get("/.well-known/oauth-protected-resource", oauthHandlers.HandleProtectedResourceMetadata)
+
+	// OAuth client metadata (this server as an OAuth client)
+	r.Get("/oauth-client-metadata.json", server.HandleClientMetadata(server.ClientMetadataConfig{
+		ExternalBaseURL: cfg.ExternalBaseURL,
+		ClientName:      "Hypergoat",
+		Scope:           "atproto transition:generic",
+	}))
+
+	// OAuth flow endpoints
+	r.Get("/oauth/authorize", oauthHandlers.HandleAuthorize)
+	r.Post("/oauth/authorize", oauthHandlers.HandleAuthorize)
+	r.Get("/oauth/callback", oauthHandlers.HandleCallback)
+	r.Post("/oauth/token", oauthHandlers.HandleToken)
+	r.Get("/oauth/jwks", oauthHandlers.HandleJWKS)
+	r.Post("/oauth/revoke", oauthHandlers.HandleRevoke)
+
+	slog.Info("OAuth endpoints enabled",
+		"authorization_server", cfg.ExternalBaseURL+"/.well-known/oauth-authorization-server",
+		"client_metadata", cfg.ExternalBaseURL+"/oauth-client-metadata.json",
+	)
+
+	// Additional OAuth endpoints
+	registerHandler := server.NewOAuthRegisterHandler(db)
+	r.Post("/oauth/register", registerHandler.HandleRegister)
+
+	parHandler := server.NewOAuthPARHandler(db)
+	r.Post("/oauth/par", parHandler.HandlePAR)
+
+	r.Get("/oauth/dpop/nonce", server.HandleDPoPNonce)
+	r.Post("/oauth/dpop/nonce", server.HandleDPoPNonce)
+
+	// Start OAuth cleanup worker (clean up expired tokens every hour)
+	oauthCleanupCtx, oauthCleanupCancel := context.WithCancel(context.Background())
+	defer oauthCleanupCancel()
+	oauthHandlers.StartCleanupWorker(oauthCleanupCtx, 1*time.Hour)
+
+	// Admin GraphQL endpoint
+	adminRepos := &admin.Repositories{
+		Records:          recordsRepo,
+		Actors:           actorsRepo,
+		Lexicons:         lexiconsRepo,
+		Config:           configRepo,
+		OAuthClients:     repositories.NewOAuthClientsRepository(db),
+		Activity:         repositories.NewJetstreamActivityRepository(db),
+		Labels:           repositories.NewLabelsRepository(db),
+		LabelDefinitions: repositories.NewLabelDefinitionsRepository(db),
+		LabelPreferences: repositories.NewLabelPreferencesRepository(db),
+		Reports:          repositories.NewReportsRepository(db),
+	}
+
+	authMiddleware := oauth.NewAuthMiddleware(
+		repositories.NewOAuthAccessTokensRepository(db),
+		repositories.NewOAuthDPoPJTIRepository(db),
+		cfg.ExternalBaseURL,
+	)
+
+	// Get domain DID from config or use a placeholder
+	domainDID := os.Getenv("DOMAIN_DID")
+	if domainDID == "" {
+		domainDID = "did:web:" + cfg.Host // Derive from host
+	}
+
+	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, configRepo, domainDID)
+	if err != nil {
+		slog.Error("Failed to create admin GraphQL handler", "error", err)
+	} else {
+		// Admin endpoint with optional auth (allows introspection without auth)
+		r.Handle("/admin/graphql", adminHandler.OptionalAuth())
+		r.Handle("/admin/graphql/", adminHandler.OptionalAuth())
+		slog.Info("Admin GraphQL endpoint enabled", "path", "/admin/graphql")
+	}
+
+	// GraphiQL playgrounds
+	r.Get("/graphiql", server.HandleGraphiQL(server.GraphiQLConfig{
+		Endpoint:             cfg.ExternalBaseURL + "/graphql",
+		SubscriptionEndpoint: strings.Replace(cfg.ExternalBaseURL, "http", "ws", 1) + "/graphql/ws",
+		Title:                "Hypergoat GraphQL",
+		DefaultQuery: `# Hypergoat GraphQL API
+# 
+# Explore the AT Protocol data indexed by this AppView.
+# Try querying for records from your configured lexicons.
+#
+# Example:
+{
+  __schema {
+    types {
+      name
+    }
+  }
+}
+`,
+	}))
+
+	r.Get("/graphiql/admin", server.HandleGraphiQL(server.GraphiQLConfig{
+		Endpoint: cfg.ExternalBaseURL + "/admin/graphql",
+		Title:    "Hypergoat Admin",
+		DefaultQuery: `# Hypergoat Admin API
+#
+# Administrative operations for managing the AppView.
+# Note: Some operations require authentication.
+#
+# Example:
+{
+  statistics {
+    recordCount
+    actorCount
+    lexiconCount
+  }
+}
+`,
+	}))
+
+	slog.Info("GraphiQL playgrounds enabled",
+		"public", cfg.ExternalBaseURL+"/graphiql",
+		"admin", cfg.ExternalBaseURL+"/graphiql/admin",
+	)
+
+	// Start background workers
+	activityCleanupWorker := workers.NewActivityCleanupWorker(
+		repositories.NewJetstreamActivityRepository(db),
+	)
+	workersCtx, workersCancel := context.WithCancel(context.Background())
+	defer workersCancel()
+	activityCleanupWorker.Start(workersCtx)
+
 	// Load lexicons and set up GraphQL endpoint
 	registry := lexicon.NewRegistry()
 	lexiconDir := os.Getenv("LEXICON_DIR")
@@ -343,6 +496,9 @@ func run() error {
 	}
 
 	slog.Info("Shutting down server...")
+
+	// Stop background workers
+	workersCancel()
 
 	// Stop Jetstream consumer
 	if jsConsumer != nil {
