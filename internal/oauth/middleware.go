@@ -135,7 +135,9 @@ func (m *AuthMiddleware) validateDPoPToken(r *http.Request, token string) (*Auth
 		CreatedAt: result.IAT,
 	}
 	if err := m.jtis.Insert(ctx, jti); err != nil {
-		return nil, ErrServerError
+		// Insert failure likely means a concurrent request used the same JTI
+		// (unique constraint violation). Treat as a replay attempt, not a server error.
+		return nil, ErrDPoPReplay
 	}
 
 	// Get the access token

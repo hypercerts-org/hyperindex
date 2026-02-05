@@ -38,6 +38,10 @@ type Config struct {
 	BackfillMaxPDSWorkers     int
 	BackfillMaxHTTPConcurrent int
 	BackfillRepoTimeoutMS     int
+
+	// Security
+	TrustProxyHeaders bool   // Trust X-User-DID header from reverse proxy (default: false, DANGEROUS if true without proxy)
+	AllowedOrigins    string // Comma-separated allowed WebSocket/CORS origins (empty = same-origin only, "*" = allow all)
 }
 
 // Load reads configuration from environment variables.
@@ -59,6 +63,8 @@ func Load() (*Config, error) {
 		BackfillMaxPDSWorkers:     getEnvInt("BACKFILL_MAX_PDS_WORKERS", 10),
 		BackfillMaxHTTPConcurrent: getEnvInt("BACKFILL_MAX_HTTP_CONCURRENT", 50),
 		BackfillRepoTimeoutMS:     getEnvInt("BACKFILL_REPO_TIMEOUT", 60000),
+		TrustProxyHeaders:         getEnvBool("TRUST_PROXY_HEADERS", false),
+		AllowedOrigins:            getEnv("ALLOWED_ORIGINS", ""),
 	}
 
 	// Generate SecretKeyBase if not provided
@@ -103,7 +109,14 @@ func (c *Config) LogConfig() {
 		"oauth_loopback_mode", c.OAuthLoopbackMode,
 		"oauth_signing_key_set", c.OAuthSigningKey != "",
 		"jetstream_disable_cursor", c.JetstreamDisableCursor,
+		"trust_proxy_headers", c.TrustProxyHeaders,
+		"allowed_origins", c.AllowedOrigins,
 	)
+
+	if c.TrustProxyHeaders {
+		slog.Warn("TRUST_PROXY_HEADERS is enabled: X-User-DID header will be trusted for authentication. " +
+			"Only enable this when running behind a trusted reverse proxy that sets this header.")
+	}
 }
 
 // Address returns the server address in host:port format.

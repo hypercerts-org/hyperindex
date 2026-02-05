@@ -58,29 +58,41 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 			},
 			"statistics": &graphql.Field{
 				Type:        graphql.NewNonNull(StatisticsType),
-				Description: "Get system statistics",
+				Description: "Get system statistics (admin only)",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					return b.resolver.Statistics(p.Context)
 				},
 			},
 			"settings": &graphql.Field{
 				Type:        graphql.NewNonNull(SettingsType),
-				Description: "Get system settings",
+				Description: "Get system settings (admin only)",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					return b.resolver.Settings(p.Context)
 				},
 			},
 			"isBackfilling": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.Boolean),
-				Description: "Check if a backfill is currently running",
+				Description: "Check if a backfill is currently running (admin only)",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					return b.resolver.IsBackfilling(), nil
 				},
 			},
 			"lexicons": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(LexiconType))),
-				Description: "Get all lexicon definitions",
+				Description: "Get all lexicon definitions (admin only)",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					return b.resolver.Lexicons(p.Context)
 				},
 			},
@@ -96,7 +108,7 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 			},
 			"activityBuckets": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(ActivityBucketType))),
-				Description: "Get aggregated activity data for a time range",
+				Description: "Get aggregated activity data for a time range (admin only)",
 				Args: graphql.FieldConfigArgument{
 					"range": &graphql.ArgumentConfig{
 						Type:        graphql.NewNonNull(TimeRangeEnum),
@@ -104,13 +116,16 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					timeRange, _ := p.Args["range"].(string)
 					return b.resolver.ActivityBuckets(p.Context, timeRange)
 				},
 			},
 			"recentActivity": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(ActivityEntryType))),
-				Description: "Get recent activity entries",
+				Description: "Get recent activity entries (admin only)",
 				Args: graphql.FieldConfigArgument{
 					"hours": &graphql.ArgumentConfig{
 						Type:         graphql.NewNonNull(graphql.Int),
@@ -119,6 +134,9 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					hours, _ := p.Args["hours"].(int)
 					if hours < 1 {
 						hours = 1
@@ -131,8 +149,11 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 			},
 			"labelDefinitions": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(LabelDefinitionType))),
-				Description: "Get all label definitions",
+				Description: "Get all label definitions (admin only)",
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
 					return b.resolver.LabelDefinitions(p.Context)
 				},
 			},

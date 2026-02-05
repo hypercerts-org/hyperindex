@@ -56,3 +56,6 @@ logs/
 tmp/
 temp/
 .beads/
+
+# AI tools
+.opencode/

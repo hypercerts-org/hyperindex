@@ -49,15 +49,43 @@ type Handler struct {
 }
 
 // NewHandler creates a new subscription handler.
-func NewHandler(schema *graphql.Schema) *Handler {
+// allowedOrigins controls which origins may open WebSocket connections.
+// Pass []string{"*"} to allow all origins (development only).
+// Pass nil or empty slice to enforce same-origin policy.
+func NewHandler(schema *graphql.Schema, allowedOrigins []string) *Handler {
 	return &Handler{
 		schema: schema,
 		upgrader: websocket.Upgrader{
 			Subprotocols: []string{graphqlWSProtocol},
-			CheckOrigin: func(r *http.Request) bool {
-				return true // Allow all origins for development
-			},
+			CheckOrigin:  makeOriginChecker(allowedOrigins),
 		},
+	}
+}
+
+// makeOriginChecker returns a CheckOrigin function based on the allowed origins list.
+func makeOriginChecker(allowedOrigins []string) func(r *http.Request) bool {
+	// If explicitly set to "*", allow all origins (development mode)
+	if len(allowedOrigins) == 1 && allowedOrigins[0] == "*" {
+		slog.Warn("WebSocket CheckOrigin allows all origins (development mode)")
+		return func(r *http.Request) bool {
+			return true
+		}
+	}
+
+	return func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		if origin == "" {
+			return true // Same-origin requests don't send Origin header
+		}
+		for _, allowed := range allowedOrigins {
+			if origin == allowed {
+				return true
+			}
+		}
+		slog.Warn("WebSocket connection rejected: origin not allowed",
+			"origin", origin,
+			"allowed_origins", allowedOrigins)
+		return false
 	}
 }
 

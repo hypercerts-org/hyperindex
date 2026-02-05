@@ -5,12 +5,16 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"regexp"
 	"strings"
 
 	_ "modernc.org/sqlite" // Pure Go SQLite driver
 
 	"github.com/GainForest/hypergoat/internal/database"
 )
+
+// validJSONFieldName matches safe JSON field names to prevent SQL injection.
+var validJSONFieldName = regexp.MustCompile(`^[a-zA-Z_][a-zA-Z0-9_]*$`)
 
 // Executor implements database.Executor for SQLite.
 type Executor struct {
@@ -122,12 +126,22 @@ func (e *Executor) Placeholders(count, startIndex int) string {
 }
 
 // JSONExtract generates SQLite JSON extraction SQL.
+// The field parameter is validated to prevent SQL injection.
 func (e *Executor) JSONExtract(column, field string) string {
+	if !validJSONFieldName.MatchString(field) {
+		panic(fmt.Sprintf("sqlite: invalid JSON field name: %q (must match ^[a-zA-Z_][a-zA-Z0-9_]*$)", field))
+	}
 	return fmt.Sprintf("json_extract(%s, '$.%s')", column, field)
 }
 
 // JSONExtractPath generates SQLite JSON path extraction SQL.
+// All path segments are validated to prevent SQL injection.
 func (e *Executor) JSONExtractPath(column string, path []string) string {
+	for _, p := range path {
+		if !validJSONFieldName.MatchString(p) {
+			panic(fmt.Sprintf("sqlite: invalid JSON path segment: %q (must match ^[a-zA-Z_][a-zA-Z0-9_]*$)", p))
+		}
+	}
 	jsonPath := "$." + strings.Join(path, ".")
 	return fmt.Sprintf("json_extract(%s, '%s')", column, jsonPath)
 }

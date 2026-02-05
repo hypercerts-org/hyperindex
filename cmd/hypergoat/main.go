@@ -323,7 +323,7 @@ func run() error {
 		domainDID = "did:web:" + cfg.Host // Derive from host
 	}
 
-	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, configRepo, domainDID)
+	adminHandler, err := admin.NewHandler(adminRepos, authMiddleware, configRepo, domainDID, cfg.TrustProxyHeaders)
 	if err != nil {
 		slog.Error("Failed to create admin GraphQL handler", "error", err)
 	} else {
@@ -500,7 +500,14 @@ func run() error {
 		slog.Info("GraphQL endpoint enabled", "path", "/graphql")
 
 		// Add WebSocket subscription endpoint
-		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema())
+		var allowedOrigins []string
+		if cfg.AllowedOrigins != "" {
+			allowedOrigins = strings.Split(cfg.AllowedOrigins, ",")
+			for i := range allowedOrigins {
+				allowedOrigins[i] = strings.TrimSpace(allowedOrigins[i])
+			}
+		}
+		subscriptionHandler := subscription.NewHandler(graphqlHandler.Schema(), allowedOrigins)
 		r.Handle("/graphql/ws", subscriptionHandler)
 		slog.Info("GraphQL subscriptions enabled", "path", "/graphql/ws")
 	}
@@ -652,10 +659,14 @@ func run() error {
 
 	// Create HTTP server
 	srv := &http.Server{
-		Addr:         cfg.Address(),
-		Handler:      r,
-		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		Addr:        cfg.Address(),
+		Handler:     r,
+		ReadTimeout: 15 * time.Second,
+		// WriteTimeout disabled (set to 0) to support long-lived WebSocket connections.
+		// Individual handlers enforce their own write deadlines:
+		// - WebSocket: per-message deadline in subscription/handler.go
+		// - HTTP: standard response lifecycle
+		WriteTimeout: 0,
 		IdleTimeout:  60 * time.Second,
 	}
 
