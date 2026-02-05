@@ -145,6 +145,66 @@ var recordEventType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// CollectionStat GraphQL type for collection statistics
+var collectionStatType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "CollectionStat",
+	Description: "Statistics for a collection",
+	Fields: graphql.Fields{
+		"collection": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Collection NSID",
+		},
+		"count": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Number of records in the collection",
+		},
+	},
+})
+
+// TimeSeriesPoint GraphQL type for time series data points
+var timeSeriesPointType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "TimeSeriesPoint",
+	Description: "A single data point in a time series",
+	Fields: graphql.Fields{
+		"date": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Date in YYYY-MM-DD format",
+		},
+		"count": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Number of records on this date",
+		},
+		"cumulative": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Cumulative count up to and including this date",
+		},
+	},
+})
+
+// CollectionTimeSeries GraphQL type for collection time series data
+var collectionTimeSeriesType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "CollectionTimeSeries",
+	Description: "Time series data for a collection",
+	Fields: graphql.Fields{
+		"collection": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Collection NSID",
+		},
+		"totalRecords": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Total number of records in the collection",
+		},
+		"uniqueUsers": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Number of unique users (DIDs) in the collection",
+		},
+		"data": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(timeSeriesPointType))),
+			Description: "Time series data points",
+		},
+	},
+})
+
 // buildSubscriptionType builds the root Subscription type.
 func (b *Builder) buildSubscriptionType() *graphql.Object {
 	fields := graphql.Fields{
@@ -270,6 +330,32 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			},
 		},
 		Resolve: b.createGenericRecordsResolver(),
+	}
+
+	// Add collectionStats query for efficient aggregate counts
+	fields["collectionStats"] = &graphql.Field{
+		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(collectionStatType))),
+		Description: "Get record counts for collections (efficient aggregate query)",
+		Args: graphql.FieldConfigArgument{
+			"collections": &graphql.ArgumentConfig{
+				Type:        graphql.NewList(graphql.NewNonNull(graphql.String)),
+				Description: "Filter by collection NSIDs (optional, returns all if not specified)",
+			},
+		},
+		Resolve: b.createCollectionStatsResolver(),
+	}
+
+	// Add collectionTimeSeries query for time series data
+	fields["collectionTimeSeries"] = &graphql.Field{
+		Type:        collectionTimeSeriesType,
+		Description: "Get time series data for a collection (records grouped by date)",
+		Args: graphql.FieldConfigArgument{
+			"collection": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Collection NSID",
+			},
+		},
+		Resolve: b.createCollectionTimeSeriesResolver(),
 	}
 
 	for lexiconID, connectionType := range b.connectionTypes {
@@ -591,6 +677,83 @@ func (b *Builder) createSingleRecordResolver(lexiconID string) graphql.FieldReso
 		data["cid"] = rec.CID
 
 		return data, nil
+	}
+}
+
+// createCollectionStatsResolver creates a resolver for collection statistics.
+func (b *Builder) createCollectionStatsResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		// Get repositories from context
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.Records == nil {
+			return []interface{}{}, nil
+		}
+
+		// Extract optional collections filter
+		var collections []string
+		if collectionsArg, ok := p.Args["collections"].([]interface{}); ok {
+			for _, c := range collectionsArg {
+				if s, ok := c.(string); ok {
+					collections = append(collections, s)
+				}
+			}
+		}
+
+		// Query database
+		stats, err := repos.Records.GetCollectionStatsFiltered(p.Context, collections)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get collection stats: %w", err)
+		}
+
+		// Convert to interface slice for GraphQL
+		result := make([]interface{}, len(stats))
+		for i, stat := range stats {
+			result[i] = map[string]interface{}{
+				"collection": stat.Collection,
+				"count":      stat.Count,
+			}
+		}
+
+		return result, nil
+	}
+}
+
+// createCollectionTimeSeriesResolver creates a resolver for collection time series data.
+func (b *Builder) createCollectionTimeSeriesResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		collection, ok := p.Args["collection"].(string)
+		if !ok || collection == "" {
+			return nil, fmt.Errorf("collection is required")
+		}
+
+		// Get repositories from context
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.Records == nil {
+			return nil, nil
+		}
+
+		// Query database
+		timeSeries, err := repos.Records.GetCollectionTimeSeries(p.Context, collection)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get collection time series: %w", err)
+		}
+
+		// Convert data points to interface slice
+		dataPoints := make([]interface{}, len(timeSeries.Data))
+		for i, point := range timeSeries.Data {
+			dataPoints[i] = map[string]interface{}{
+				"date":       point.Date,
+				"count":      point.Count,
+				"cumulative": point.Cumulative,
+			}
+		}
+
+		return map[string]interface{}{
+			"collection":   timeSeries.Collection,
+			"totalRecords": timeSeries.TotalRecords,
+			"uniqueUsers":  timeSeries.UniqueUsers,
+			"data":         dataPoints,
+		}, nil
 	}
 }
 

@@ -29,6 +29,21 @@ type CollectionStat struct {
 	Count      int64
 }
 
+// TimeSeriesDataPoint represents a single data point in a time series.
+type TimeSeriesDataPoint struct {
+	Date       string // YYYY-MM-DD format
+	Count      int64
+	Cumulative int64
+}
+
+// CollectionTimeSeries represents time series data for a collection.
+type CollectionTimeSeries struct {
+	Collection   string
+	TotalRecords int64
+	UniqueUsers  int64
+	Data         []TimeSeriesDataPoint
+}
+
 // InsertResult indicates whether a record was inserted or skipped.
 type InsertResult int
 
@@ -324,6 +339,116 @@ func (r *RecordsRepository) GetCollectionStats(ctx context.Context) ([]Collectio
 	}
 
 	return stats, rows.Err()
+}
+
+// GetCollectionStatsFiltered returns statistics for specified collections.
+// If collections is empty, returns stats for all collections.
+func (r *RecordsRepository) GetCollectionStatsFiltered(ctx context.Context, collections []string) ([]CollectionStat, error) {
+	if len(collections) == 0 {
+		return r.GetCollectionStats(ctx)
+	}
+
+	placeholders := r.db.Placeholders(len(collections), 1)
+	sqlStr := fmt.Sprintf("SELECT collection, COUNT(*) as count FROM record WHERE collection IN (%s) GROUP BY collection ORDER BY count DESC", placeholders)
+
+	params := make([]database.Value, len(collections))
+	for i, c := range collections {
+		params[i] = database.Text(c)
+	}
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, convertToAny(params)...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stats []CollectionStat
+	for rows.Next() {
+		var stat CollectionStat
+		if err := rows.Scan(&stat.Collection, &stat.Count); err != nil {
+			return nil, err
+		}
+		stats = append(stats, stat)
+	}
+
+	return stats, rows.Err()
+}
+
+// GetCollectionTimeSeries returns time series data for a collection.
+// Records are grouped by date extracted from createdAt, eventDate, or indexed_at.
+func (r *RecordsRepository) GetCollectionTimeSeries(ctx context.Context, collection string) (*CollectionTimeSeries, error) {
+	var sqlStr string
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		// PostgreSQL: Extract date from JSON fields or fall back to indexed_at
+		sqlStr = fmt.Sprintf(`
+			SELECT 
+				DATE(COALESCE(
+					(json->>'createdAt')::timestamp,
+					(json->>'eventDate')::timestamp,
+					indexed_at
+				)) as record_date,
+				COUNT(*) as count
+			FROM record 
+			WHERE collection = %s
+			GROUP BY record_date
+			ORDER BY record_date`, r.db.Placeholder(1))
+	default:
+		// SQLite: Use json_extract for JSON fields
+		sqlStr = fmt.Sprintf(`
+			SELECT 
+				DATE(COALESCE(
+					json_extract(json, '$.createdAt'),
+					json_extract(json, '$.eventDate'),
+					indexed_at
+				)) as record_date,
+				COUNT(*) as count
+			FROM record 
+			WHERE collection = %s
+			GROUP BY record_date
+			ORDER BY record_date`, r.db.Placeholder(1))
+	}
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, collection)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query time series: %w", err)
+	}
+	defer rows.Close()
+
+	var data []TimeSeriesDataPoint
+	var cumulative int64
+
+	for rows.Next() {
+		var date string
+		var count int64
+		if err := rows.Scan(&date, &count); err != nil {
+			return nil, err
+		}
+		cumulative += count
+		data = append(data, TimeSeriesDataPoint{
+			Date:       date,
+			Count:      count,
+			Cumulative: cumulative,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Get total records and unique users
+	var totalRecords, uniqueUsers int64
+	countSQL := fmt.Sprintf("SELECT COUNT(*), COUNT(DISTINCT did) FROM record WHERE collection = %s", r.db.Placeholder(1))
+	if err := r.db.QueryRow(ctx, countSQL, []database.Value{database.Text(collection)}, &totalRecords, &uniqueUsers); err != nil {
+		return nil, fmt.Errorf("failed to get collection totals: %w", err)
+	}
+
+	return &CollectionTimeSeries{
+		Collection:   collection,
+		TotalRecords: totalRecords,
+		UniqueUsers:  uniqueUsers,
+		Data:         data,
+	}, nil
 }
 
 // GetCIDsByURIs returns a map of URI -> CID for records that exist.

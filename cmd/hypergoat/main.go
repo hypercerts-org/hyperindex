@@ -463,9 +463,27 @@ func run() error {
 		if err := loadLexiconsFromDir(lexiconDir, registry); err != nil {
 			slog.Warn("Failed to load lexicons from directory", "dir", lexiconDir, "error", err)
 		} else {
-			slog.Info("Loaded lexicons", "count", registry.Count(), "dir", lexiconDir)
+			slog.Info("Loaded lexicons from directory", "count", registry.Count(), "dir", lexiconDir)
 		}
 	}
+
+	// Also load lexicons from the database (uploaded via admin UI)
+	dbLexicons, err := lexiconsRepo.GetAll(ctx)
+	if err != nil {
+		slog.Warn("Failed to load lexicons from database", "error", err)
+	} else if len(dbLexicons) > 0 {
+		dbLoaded := 0
+		for _, dbLex := range dbLexicons {
+			if _, err := registry.ParseAndRegister(dbLex.JSON); err != nil {
+				slog.Warn("Failed to parse database lexicon", "id", dbLex.ID, "error", err)
+			} else {
+				dbLoaded++
+			}
+		}
+		slog.Info("Loaded lexicons from database", "count", dbLoaded, "total", len(dbLexicons))
+	}
+
+	slog.Info("Total lexicons registered", "count", registry.Count())
 
 	// Create GraphQL handler with database repositories
 	repos := &resolver.Repositories{
