@@ -18,7 +18,7 @@ const garamond = EB_Garamond({
 });
 
 export const metadata: Metadata = {
-  title: "Hypergoat",
+  title: "Hyperindex",
   description: "AT Protocol AppView Server",
   icons: {
     icon: "/gainforest-logo.png",

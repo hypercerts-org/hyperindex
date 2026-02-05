@@ -67,13 +67,13 @@ export function Header() {
             <Link href="/" className="flex items-center gap-2.5">
               <Image
                 src="/logo.png"
-                alt="Hypergoat"
+                alt="Hyperindex"
                 width={20}
                 height={20}
                 className="opacity-80"
               />
               <span className="text-lg font-medium text-zinc-800 tracking-tight">
-                Hypergoat
+                hi
               </span>
             </Link>
 

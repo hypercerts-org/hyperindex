@@ -1,17 +1,18 @@
 const API_ENDPOINT = "https://hypergoat-app-production.up.railway.app";
 const WS_ENDPOINT = "wss://hypergoat-app-production.up.railway.app";
 
-const agentsMd = `# Hypergoat API - Complete Integration Guide for AI Agents
+const agentsMd = `# Hyperindex (hi) API - Complete Integration Guide for AI Agents
 
-## What is Hypergoat?
+## What is Hyperindex?
 
-**Hypergoat** stands for **Hypersphere Go ATProto AppView**. It is GainForest's main AppView server for the AT Protocol Hypersphere ecosystem.
+**Hyperindex** (short: **hi**, formerly known as Hypergoat) is GainForest's AT Protocol AppView server for the Hypersphere ecosystem. The name "hi" stands for **H**yper**i**ndex -- it indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API.
 
 ### Key Information
 
 - **Organization**: GainForest (https://gainforest.earth)
 - **Purpose**: Indexes Lexicon-defined records from the AT Protocol network and exposes them via a dynamically-generated GraphQL API
 - **Ecosystem**: Part of the Hypersphere ecosystem for environmental impact tracking
+- **History**: Formerly known as Hypergoat (Hypersphere Go ATProto AppView)
 
 ### Related Resources
 
@@ -22,9 +23,9 @@ const agentsMd = `# Hypergoat API - Complete Integration Guide for AI Agents
 | Agent Lexicons | https://impactindexer.org/lexicon/agents |
 | GainForest | https://gainforest.earth |
 
-### What Hypergoat Indexes
+### What Hyperindex Indexes
 
-Hypergoat indexes records defined by Lexicons in the Hypersphere ecosystem. The primary lexicons include:
+Hyperindex indexes records defined by Lexicons in the Hypersphere ecosystem. The primary lexicons include:
 
 - **Agent records** - AI and human agents in the ecosystem (see: https://impactindexer.org/lexicon/agents)
 - **Impact records** - Environmental impact data
@@ -405,7 +406,7 @@ query GetFilteredRecords(
 
 ## Pagination (Relay Specification)
 
-Hypergoat uses Relay-style cursor-based pagination.
+Hyperindex uses Relay-style cursor-based pagination.
 
 ### Arguments
 
@@ -684,7 +685,7 @@ asyncio.run(subscribe())
 
 ## AT Protocol Record Structure
 
-Records in Hypergoat follow the AT Protocol format:
+Records in Hyperindex follow the AT Protocol format:
 
 ### Record Fields
 
@@ -696,7 +697,7 @@ Records in Hypergoat follow the AT Protocol format:
 | \`rkey\` | String | Record key (unique within collection for this DID) |
 | \`record\` | JSON | The actual record data (schema defined by lexicon) |
 | \`createdAt\` | DateTime | When the record was created |
-| \`indexedAt\` | DateTime | When Hypergoat indexed the record |
+| \`indexedAt\` | DateTime | When Hyperindex indexed the record |
 
 ### AT URI Format
 
@@ -884,7 +885,7 @@ Currently no strict rate limits, but please be respectful:
 
 ## Useful Links
 
-### Hypergoat & Hypersphere
+### Hyperindex & Hypersphere
 - GraphiQL Explorer: ${API_ENDPOINT}/graphiql
 - Hypersphere Explorer: https://impactindexer.org/
 - Lexicon Reference: https://impactindexer.org/lexicon/

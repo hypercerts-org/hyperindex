@@ -628,7 +628,7 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
           API Documentation
         </h2>
         <p className="text-zinc-500 mt-3 leading-relaxed">
-          <strong className="text-zinc-700">Hypergoat</strong> (<em>Hypersphere Go ATProto AppView</em>) is{" "}
+          <strong className="text-zinc-700">Hyperindex</strong> (<em>hi</em>, formerly Hypergoat) is{" "}
           <a href="https://gainforest.earth" target="_blank" rel="noopener noreferrer" className="text-emerald-600 hover:underline">GainForest&apos;s</a>{" "}
           main AppView for the AT Protocol Hypersphere ecosystem. It indexes Lexicon-defined records and exposes them via a dynamically-generated GraphQL API.
         </p>
@@ -800,7 +800,7 @@ websocat ${API_ENDPOINT.replace("https://", "wss://")}/graphql \\
         </h3>
         <div className="rounded-xl border border-zinc-200/60 bg-white p-6 space-y-6">
           <p className="text-sm text-zinc-600 leading-relaxed">
-            Hypergoat implements the <code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-700">graphql-transport-ws</code> protocol. 
+            Hyperindex implements the <code className="text-xs bg-zinc-100 px-1.5 py-0.5 rounded text-zinc-700">graphql-transport-ws</code> protocol. 
             This is the modern standard for GraphQL subscriptions over WebSocket.
           </p>
 

@@ -117,7 +117,7 @@ export default function SettingsPage() {
           Settings
         </h2>
         <p className="text-zinc-500 mt-3 leading-relaxed">
-          Configure your Hypergoat AppView instance
+          Configure your Hyperindex AppView instance
         </p>
       </div>
 

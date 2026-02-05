@@ -182,7 +182,7 @@ export default function OnboardingPage() {
                 </svg>
               </div>
               <h2 className="font-[family-name:var(--font-garamond)] text-2xl text-zinc-900 mb-2">
-                Welcome to Hypergoat
+                Welcome to Hyperindex
               </h2>
               <p className="text-zinc-500 mb-8">
                 Let&apos;s set up your AT Protocol AppView server. This wizard will guide you
@@ -360,7 +360,7 @@ export default function OnboardingPage() {
                 Setup Complete!
               </h2>
               <p className="text-zinc-500 mb-8">
-                Your Hypergoat AppView is ready to go.
+                Your Hyperindex AppView is ready to go.
               </p>
               <div className="bg-zinc-50 rounded-lg p-4 mb-6 text-left">
                 <h4 className="text-sm font-medium text-zinc-600 mb-3">Configuration Summary</h4>

@@ -1,12 +1,14 @@
 <p align="center">
-  <img src="hypergoat.png" alt="Hypergoat" width="600">
+  <img src="hypergoat.png" alt="Hyperindex" width="600">
 </p>
 
-# Hypergoat
+# Hyperindex (hi)
 
 **A Go AT Protocol AppView server that indexes records and exposes them via GraphQL**
 
-Hypergoat connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
+*Formerly known as Hypergoat.*
+
+Hyperindex (hi) connects to the AT Protocol network, indexes records matching your configured Lexicons, and provides a GraphQL API for querying them. It's a Go port of [Quickslice](https://github.com/quickslice/quickslice).
 
 ## Quick Start
 
@@ -41,7 +43,7 @@ Or place lexicon JSON files in a directory and set `LEXICON_DIR` environment var
 
 ### 2. Start Indexing
 
-Once lexicons are registered, Hypergoat automatically:
+Once lexicons are registered, Hyperindex automatically:
 - **Connects to Jetstream** for real-time events
 - **Indexes matching records** to your database
 
@@ -141,8 +143,8 @@ docker compose up --build
 Or build manually:
 
 ```bash
-docker build -t hypergoat .
-docker run -p 8080:8080 -v ./data:/data hypergoat
+docker build -t hyperindex .
+docker run -p 8080:8080 -v ./data:/data hyperindex
 ```
 
 ## Admin API
@@ -168,7 +170,7 @@ The admin API at `/admin/graphql` provides:
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    Hypergoat Server                      │
+│                   Hyperindex (hi) Server                  │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  Jetstream ──→ Consumer ──→ Records DB ──→ GraphQL API │
@@ -210,11 +212,16 @@ make build
 
 Migrations run automatically on startup.
 
+## History
+
+Hyperindex was incubated and created by [GainForest](https://gainforest.earth) and [Claude Opus 4.5](https://www.anthropic.com/claude) (Anthropic), originally under the name *Hypergoat*. It has since been moved to [hypercerts-org](https://github.com/hypercerts-org) for community maintenance.
+
 ## License
 
 Apache License 2.0
 
 ## Acknowledgments
 
+- [GainForest](https://gainforest.earth) & [Claude Opus 4.5](https://www.anthropic.com/claude) - Original creators
 - [Quickslice](https://github.com/quickslice/quickslice) - Original Gleam implementation
 - [AT Protocol](https://atproto.com/) - The underlying protocol
