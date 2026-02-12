@@ -431,9 +431,9 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 
 	// GraphiQL playgrounds
 	r.Get("/graphiql", server.HandleGraphiQL(server.GraphiQLConfig{
-		Endpoint:             cfg.ExternalBaseURL + "/graphql",
-		SubscriptionEndpoint: strings.Replace(cfg.ExternalBaseURL, "http", "ws", 1) + "/graphql/ws",
-		Title:                "Hypergoat GraphQL",
+		EndpointPath:     "/graphql",
+		SubscriptionPath: "/graphql/ws",
+		Title:            "Hypergoat GraphQL",
 		DefaultQuery: `# Hypergoat GraphQL API
 # 
 # Explore the AT Protocol data indexed by this AppView.
@@ -451,8 +451,8 @@ func setupAdmin(r *chi.Mux, cfg *config.Config, svc *services) *admin.Handler {
 	}))
 
 	r.Get("/graphiql/admin", server.HandleGraphiQL(server.GraphiQLConfig{
-		Endpoint: cfg.ExternalBaseURL + "/admin/graphql",
-		Title:    "Hypergoat Admin",
+		EndpointPath: "/admin/graphql",
+		Title:        "Hypergoat Admin",
 		DefaultQuery: `# Hypergoat Admin API
 #
 # Administrative operations for managing the AppView.

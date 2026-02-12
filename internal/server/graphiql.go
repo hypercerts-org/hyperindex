@@ -9,10 +9,11 @@ import (
 
 // GraphiQLConfig contains configuration for the GraphiQL handler.
 type GraphiQLConfig struct {
-	// Endpoint is the GraphQL endpoint URL.
-	Endpoint string
-	// SubscriptionEndpoint is the WebSocket endpoint for subscriptions (optional).
-	SubscriptionEndpoint string
+	// EndpointPath is the path to the GraphQL endpoint (e.g. "/graphql").
+	// The full URL is derived at runtime from the browser's window.location.
+	EndpointPath string
+	// SubscriptionPath is the path for WebSocket subscriptions (optional, e.g. "/graphql/ws").
+	SubscriptionPath string
 	// Title is the page title.
 	Title string
 	// DefaultQuery is the initial query to display.
@@ -71,22 +72,14 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
 `
 	}
 
-	// Build fetcher config
-	fetcherConfig := `{
-      url: '` + cfg.Endpoint + `',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-    }`
-
-	if cfg.SubscriptionEndpoint != "" {
-		fetcherConfig = `{
-      url: '` + cfg.Endpoint + `',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      subscriptionUrl: '` + cfg.SubscriptionEndpoint + `',
-    }`
+	// Build subscription URL JavaScript snippet.
+	// Uses window.location to derive the correct WebSocket URL at runtime,
+	// so the page works regardless of which domain it's accessed through.
+	subscriptionJS := ""
+	if cfg.SubscriptionPath != "" {
+		subscriptionJS = `
+      const wsProto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      fetcherOpts.subscriptionUrl = wsProto + '//' + location.host + '` + cfg.SubscriptionPath + `';`
 	}
 
 	return `<!DOCTYPE html>
@@ -114,8 +107,12 @@ func generateGraphiQLHTML(cfg GraphiQLConfig) string {
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/graphiql@3/graphiql.min.js"></script>
   <script>
+    const fetcherOpts = {
+      url: location.origin + '` + cfg.EndpointPath + `',
+      headers: { 'Content-Type': 'application/json' },
+    };` + subscriptionJS + `
     const root = ReactDOM.createRoot(document.getElementById('graphiql'));
-    const fetcher = GraphiQL.createFetcher(` + fetcherConfig + `);
+    const fetcher = GraphiQL.createFetcher(fetcherOpts);
     root.render(
       React.createElement(GraphiQL, {
         fetcher: fetcher,
