@@ -314,8 +314,8 @@ func TestHandleClientMetadata(t *testing.T) {
 
 func TestHandleGraphiQL(t *testing.T) {
 	baseCfg := GraphiQLConfig{
-		Endpoint: "/graphql",
-		Title:    "Hypergoat GraphiQL",
+		EndpointPath: "/graphql",
+		Title:        "Hypergoat GraphiQL",
 	}
 
 	t.Run("GET returns 200 with text/html content type", func(t *testing.T) {
@@ -363,9 +363,9 @@ func TestHandleGraphiQL(t *testing.T) {
 
 	t.Run("subscription endpoint included when configured", func(t *testing.T) {
 		cfg := GraphiQLConfig{
-			Endpoint:             "/graphql",
-			SubscriptionEndpoint: "ws://localhost:8080/graphql/ws",
-			Title:                "Test",
+			EndpointPath:     "/graphql",
+			SubscriptionPath: "/graphql/ws",
+			Title:            "Test",
 		}
 		handler := HandleGraphiQL(cfg)
 		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
@@ -374,8 +374,8 @@ func TestHandleGraphiQL(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "ws://localhost:8080/graphql/ws") {
-			t.Error("response body does not contain subscription endpoint")
+		if !strings.Contains(body, "/graphql/ws") {
+			t.Error("response body does not contain subscription path")
 		}
 		if !strings.Contains(body, "subscriptionUrl") {
 			t.Error("response body does not contain subscriptionUrl config key")
@@ -409,7 +409,7 @@ func TestHandleGraphiQL(t *testing.T) {
 
 	t.Run("default title used when not configured", func(t *testing.T) {
 		cfg := GraphiQLConfig{
-			Endpoint: "/graphql",
+			EndpointPath: "/graphql",
 		}
 		handler := HandleGraphiQL(cfg)
 		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
@@ -420,6 +420,46 @@ func TestHandleGraphiQL(t *testing.T) {
 		body := rec.Body.String()
 		if !strings.Contains(body, "<title>GraphiQL</title>") {
 			t.Error("response body does not contain default title")
+		}
+	})
+
+	t.Run("admin auth bar present when AdminAuth enabled", func(t *testing.T) {
+		cfg := GraphiQLConfig{
+			EndpointPath: "/admin/graphql",
+			Title:        "Admin",
+			AdminAuth:    true,
+		}
+		handler := HandleGraphiQL(cfg)
+		req := httptest.NewRequest(http.MethodGet, "/graphiql/admin", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if !strings.Contains(body, "admin-api-key") {
+			t.Error("response body does not contain API key input")
+		}
+		if !strings.Contains(body, "admin-did") {
+			t.Error("response body does not contain DID input")
+		}
+		if !strings.Contains(body, "X-User-DID") {
+			t.Error("response body does not contain X-User-DID header logic")
+		}
+		if !strings.Contains(body, "getAdminHeaders") {
+			t.Error("response body does not contain custom header fetcher")
+		}
+	})
+
+	t.Run("admin auth bar absent when AdminAuth disabled", func(t *testing.T) {
+		handler := HandleGraphiQL(baseCfg)
+		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
+		rec := httptest.NewRecorder()
+
+		handler.ServeHTTP(rec, req)
+
+		body := rec.Body.String()
+		if strings.Contains(body, "admin-api-key") {
+			t.Error("response body should not contain admin auth when AdminAuth is false")
 		}
 	})
 }
