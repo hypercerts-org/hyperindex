@@ -314,8 +314,8 @@ func TestHandleClientMetadata(t *testing.T) {
 
 func TestHandleGraphiQL(t *testing.T) {
 	baseCfg := GraphiQLConfig{
-		Endpoint: "/graphql",
-		Title:    "Hypergoat GraphiQL",
+		EndpointPath: "/graphql",
+		Title:        "Hypergoat GraphiQL",
 	}
 
 	t.Run("GET returns 200 with text/html content type", func(t *testing.T) {
@@ -363,9 +363,9 @@ func TestHandleGraphiQL(t *testing.T) {
 
 	t.Run("subscription endpoint included when configured", func(t *testing.T) {
 		cfg := GraphiQLConfig{
-			Endpoint:             "/graphql",
-			SubscriptionEndpoint: "ws://localhost:8080/graphql/ws",
-			Title:                "Test",
+			EndpointPath:     "/graphql",
+			SubscriptionPath: "/graphql/ws",
+			Title:            "Test",
 		}
 		handler := HandleGraphiQL(cfg)
 		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
@@ -374,8 +374,8 @@ func TestHandleGraphiQL(t *testing.T) {
 		handler.ServeHTTP(rec, req)
 
 		body := rec.Body.String()
-		if !strings.Contains(body, "ws://localhost:8080/graphql/ws") {
-			t.Error("response body does not contain subscription endpoint")
+		if !strings.Contains(body, "/graphql/ws") {
+			t.Error("response body does not contain subscription path")
 		}
 		if !strings.Contains(body, "subscriptionUrl") {
 			t.Error("response body does not contain subscriptionUrl config key")
@@ -409,7 +409,7 @@ func TestHandleGraphiQL(t *testing.T) {
 
 	t.Run("default title used when not configured", func(t *testing.T) {
 		cfg := GraphiQLConfig{
-			Endpoint: "/graphql",
+			EndpointPath: "/graphql",
 		}
 		handler := HandleGraphiQL(cfg)
 		req := httptest.NewRequest(http.MethodGet, "/graphiql", nil)
