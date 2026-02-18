@@ -26,6 +26,11 @@ const (
 
 	// SearchTimeout is the maximum duration for a search query.
 	SearchTimeout = 10 * time.Second
+
+	// MaxINListSize is the maximum number of values allowed in an IN filter clause.
+	// SQLite has a hard 999 parameter limit (SQLITE_MAX_VARIABLE_NUMBER).
+	// We cap well below that to leave room for other query parameters.
+	MaxINListSize = 100
 )
 
 // Record represents an AT Protocol record stored in the database.
@@ -348,9 +353,9 @@ func (r *RecordsRepository) GetByCollectionWithKeysetCursor(ctx context.Context,
 // startPlaceholder is the 1-based index of the first placeholder to use.
 // Returns the clause string (without leading "AND") and the parameter values.
 // Returns an empty string and nil params if filters is empty.
-func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceholder int) (string, []database.Value) {
+func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceholder int) (string, []database.Value, error) {
 	if len(filters) == 0 {
-		return "", nil
+		return "", nil, nil
 	}
 
 	var conditions []string
@@ -420,6 +425,9 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 				conditions = append(conditions, "1 = 0")
 				continue
 			}
+			if len(inVals) > MaxINListSize {
+				return "", nil, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
+			}
 			placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
 			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", extract, placeholders))
 			for _, v := range inVals {
@@ -429,7 +437,7 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 		}
 	}
 
-	return strings.Join(conditions, " AND "), params
+	return strings.Join(conditions, " AND "), params, nil
 }
 
 // toDBValue converts an interface{} value to a database.Value.
@@ -487,7 +495,10 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	}
 
 	// Field filters
-	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+	}
 	if filterClause != "" {
 		whereParts = append(whereParts, filterClause)
 		for _, p := range filterParams {
@@ -623,7 +634,10 @@ func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
 	}
 
 	// Field filters
-	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+	}
 	if filterClause != "" {
 		whereParts = append(whereParts, filterClause)
 		for _, p := range filterParams {
@@ -736,7 +750,10 @@ func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
 	}
 
 	// Field filters
-	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+	}
 	if filterClause != "" {
 		whereParts = append(whereParts, filterClause)
 		for _, p := range filterParams {
@@ -831,7 +848,10 @@ func (r *RecordsRepository) GetCollectionCountFiltered(
 	nextPlaceholder := 2
 
 	// Field filters
-	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return 0, fmt.Errorf("failed to build filter clause: %w", err)
+	}
 	if filterClause != "" {
 		whereParts = append(whereParts, filterClause)
 		params = append(params, filterParams...)
@@ -848,7 +868,7 @@ func (r *RecordsRepository) GetCollectionCountFiltered(
 	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE %s", whereClause)
 
 	var count int64
-	err := r.db.QueryRow(ctx, sqlStr, params, &count)
+	err = r.db.QueryRow(ctx, sqlStr, params, &count)
 	return count, err
 }
 

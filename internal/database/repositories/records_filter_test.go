@@ -23,7 +23,7 @@ func newTestRepo(t *testing.T) *RecordsRepository {
 
 func TestBuildFilterClause_EmptyFilters(t *testing.T) {
 	repo := newTestRepo(t)
-	clause, params := repo.buildFilterClause(nil, 1)
+	clause, params, _ := repo.buildFilterClause(nil, 1)
 	if clause != "" {
 		t.Errorf("empty filters: clause = %q, want empty string", clause)
 	}
@@ -31,7 +31,7 @@ func TestBuildFilterClause_EmptyFilters(t *testing.T) {
 		t.Errorf("empty filters: params = %v, want nil", params)
 	}
 
-	clause2, params2 := repo.buildFilterClause([]FieldFilter{}, 1)
+	clause2, params2, _ := repo.buildFilterClause([]FieldFilter{}, 1)
 	if clause2 != "" {
 		t.Errorf("empty slice: clause = %q, want empty string", clause2)
 	}
@@ -113,7 +113,7 @@ func TestBuildFilterClause_Operators(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			clause, params := repo.buildFilterClause([]FieldFilter{tt.filter}, 1)
+			clause, params, _ := repo.buildFilterClause([]FieldFilter{tt.filter}, 1)
 			if clause == "" {
 				t.Fatalf("clause is empty, want non-empty")
 			}
@@ -132,7 +132,7 @@ func TestBuildFilterClause_ContainsWrapsValue(t *testing.T) {
 	filters := []FieldFilter{
 		{Field: "body", Operator: "contains", Value: "world", FieldType: "string"},
 	}
-	_, params := repo.buildFilterClause(filters, 1)
+	_, params, _ := repo.buildFilterClause(filters, 1)
 	if len(params) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(params))
 	}
@@ -150,7 +150,7 @@ func TestBuildFilterClause_StartsWithAppendsPercent(t *testing.T) {
 	filters := []FieldFilter{
 		{Field: "body", Operator: "startsWith", Value: "hello", FieldType: "string"},
 	}
-	_, params := repo.buildFilterClause(filters, 1)
+	_, params, _ := repo.buildFilterClause(filters, 1)
 	if len(params) != 1 {
 		t.Fatalf("expected 1 param, got %d", len(params))
 	}
@@ -168,7 +168,7 @@ func TestBuildFilterClause_InOperator(t *testing.T) {
 	filters := []FieldFilter{
 		{Field: "status", Operator: "in", Value: []interface{}{"active", "pending", "closed"}, FieldType: "string"},
 	}
-	clause, params := repo.buildFilterClause(filters, 1)
+	clause, params, _ := repo.buildFilterClause(filters, 1)
 	if !strings.Contains(clause, "IN (") {
 		t.Errorf("clause = %q, want to contain IN (", clause)
 	}
@@ -184,7 +184,7 @@ func TestBuildFilterClause_NumericCast(t *testing.T) {
 		filters := []FieldFilter{
 			{Field: "score", Operator: "gt", Value: 5, FieldType: "integer"},
 		}
-		clause, _ := repo.buildFilterClause(filters, 1)
+		clause, _, _ := repo.buildFilterClause(filters, 1)
 		if !strings.Contains(clause, "CAST(") {
 			t.Errorf("integer filter clause = %q, want CAST(...)", clause)
 		}
@@ -197,7 +197,7 @@ func TestBuildFilterClause_NumericCast(t *testing.T) {
 		filters := []FieldFilter{
 			{Field: "price", Operator: "lte", Value: 99.99, FieldType: "number"},
 		}
-		clause, _ := repo.buildFilterClause(filters, 1)
+		clause, _, _ := repo.buildFilterClause(filters, 1)
 		if !strings.Contains(clause, "CAST(") {
 			t.Errorf("number filter clause = %q, want CAST(...)", clause)
 		}
@@ -210,7 +210,7 @@ func TestBuildFilterClause_NumericCast(t *testing.T) {
 		filters := []FieldFilter{
 			{Field: "title", Operator: "eq", Value: "hello", FieldType: "string"},
 		}
-		clause, _ := repo.buildFilterClause(filters, 1)
+		clause, _, _ := repo.buildFilterClause(filters, 1)
 		if strings.Contains(clause, "CAST(") {
 			t.Errorf("string filter clause = %q, should not contain CAST", clause)
 		}
@@ -224,7 +224,7 @@ func TestBuildFilterClause_MultipleFilters(t *testing.T) {
 		{Field: "score", Operator: "gt", Value: 5, FieldType: "integer"},
 		{Field: "deletedAt", Operator: "isNull", Value: true, FieldType: "string"},
 	}
-	clause, params := repo.buildFilterClause(filters, 1)
+	clause, params, _ := repo.buildFilterClause(filters, 1)
 
 	// Should be joined with AND
 	parts := strings.Split(clause, " AND ")
@@ -531,5 +531,75 @@ func TestGetByCollectionSortedWithKeysetCursor_SortAndFilters(t *testing.T) {
 		if rec.URI == "at://did:plc:test/col/r2" {
 			t.Error("r2 (tag=rust) should not be in results")
 		}
+	}
+}
+
+func TestBuildFilterClause_INLimit(t *testing.T) {
+	repo := newTestRepo(t)
+
+	tests := []struct {
+		name      string
+		values    []interface{}
+		wantErr   bool
+		wantCond  string // expected condition substring (when no error)
+	}{
+		{
+			name:     "0 values returns 1 = 0",
+			values:   []interface{}{},
+			wantErr:  false,
+			wantCond: "1 = 0",
+		},
+		{
+			name:     "1 value succeeds",
+			values:   []interface{}{"a"},
+			wantErr:  false,
+			wantCond: "IN (",
+		},
+		{
+			name:    "100 values (boundary) succeeds",
+			values:  func() []interface{} {
+				vals := make([]interface{}, 100)
+				for i := range vals {
+					vals[i] = i
+				}
+				return vals
+			}(),
+			wantErr:  false,
+			wantCond: "IN (",
+		},
+		{
+			name:    "101 values (over limit) returns error",
+			values:  func() []interface{} {
+				vals := make([]interface{}, 101)
+				for i := range vals {
+					vals[i] = i
+				}
+				return vals
+			}(),
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filters := []FieldFilter{
+				{Field: "status", Operator: "in", Value: tt.values, FieldType: "string"},
+			}
+			clause, _, err := repo.buildFilterClause(filters, 1)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error, got nil (clause=%q)", clause)
+				} else if !strings.Contains(err.Error(), "exceeds maximum") {
+					t.Errorf("error = %q, want to contain \"exceeds maximum\"", err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tt.wantCond != "" && !strings.Contains(clause, tt.wantCond) {
+				t.Errorf("clause = %q, want to contain %q", clause, tt.wantCond)
+			}
+		})
 	}
 }
