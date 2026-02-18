@@ -74,6 +74,7 @@ type backgroundServices struct {
 	jsCancel           context.CancelFunc
 	tapConsumer        *tap.Consumer
 	tapCancel          context.CancelFunc
+	tapAdminClient     *tap.AdminClient // reused for health checks; nil when TAP_ENABLED=false
 }
 
 // Stop cleanly shuts down all background services.
@@ -124,12 +125,12 @@ func run() error {
 	}
 	defer svc.db.Close()
 
-	// Set up HTTP router with middleware and basic endpoints
-	r := setupRouter(cfg, svc)
-
 	// Track background services for clean shutdown
 	bg := &backgroundServices{}
 	defer bg.Stop()
+
+	// Set up HTTP router with middleware and basic endpoints
+	r := setupRouter(cfg, svc, bg)
 
 	// Set up OAuth endpoints
 	setupOAuth(r, cfg, svc, bg)
@@ -248,7 +249,9 @@ func populateActivityIfEmpty(ctx context.Context, svc *services) {
 
 // setupRouter creates the chi router with middleware and basic HTTP endpoints
 // (health, stats, root info, XRPC placeholder).
-func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
+// bg is passed so that health/stats handlers can access the Tap admin client
+// once it is wired up by startTap (after setupRouter returns).
+func setupRouter(cfg *config.Config, svc *services, bg *backgroundServices) *chi.Mux {
 	r := chi.NewRouter()
 
 	// Middleware
@@ -274,6 +277,25 @@ func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
 	r.Get("/health", func(w http.ResponseWriter, req *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
+
+		if cfg.TapEnabled && bg.tapAdminClient != nil {
+			if err := bg.tapAdminClient.Health(req.Context()); err != nil {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"status": "degraded",
+					"tap":    "unreachable",
+					"error":  err.Error(),
+					"time":   time.Now().UTC().Format(time.RFC3339),
+				})
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"status": "ok",
+				"tap":    "ok",
+				"time":   time.Now().UTC().Format(time.RFC3339),
+			})
+			return
+		}
+
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status": "healthy",
 			"time":   time.Now().UTC().Format(time.RFC3339),
@@ -302,13 +324,27 @@ func setupRouter(cfg *config.Config, svc *services) *chi.Mux {
 			lexiconCount = -1
 		}
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		stats := map[string]any{
 			"records":  recordCount,
 			"actors":   actorCount,
 			"lexicons": lexiconCount,
 			"time":     time.Now().UTC().Format(time.RFC3339),
-		})
+		}
+
+		if cfg.TapEnabled && bg.tapConsumer != nil {
+			tapStats := bg.tapConsumer.Stats()
+			stats["tap"] = map[string]any{
+				"events_received": tapStats.EventsReceived,
+				"records_created": tapStats.RecordsCreated,
+				"records_updated": tapStats.RecordsUpdated,
+				"records_deleted": tapStats.RecordsDeleted,
+				"identity_events": tapStats.IdentityEvents,
+				"errors":          tapStats.Errors,
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(stats)
 	})
 
 	// Root endpoint - server info
@@ -787,11 +823,13 @@ func startTap(
 		}
 	}()
 
+	// Create a shared admin client for health checks and backfill callbacks.
+	tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
+	adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
+	bg.tapAdminClient = adminClient
+
 	// Wire admin backfill callbacks to use Tap's /repos/add API.
 	if adminHandler != nil {
-		tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
-		adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
-
 		adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
 			return adminClient.AddRepos(ctx, []string{did})
 		})
