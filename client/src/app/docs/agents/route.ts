@@ -1,5 +1,5 @@
-const API_ENDPOINT = "https://hypergoat-app-production.up.railway.app";
-const WS_ENDPOINT = "wss://hypergoat-app-production.up.railway.app";
+const API_ENDPOINT = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
+const WS_ENDPOINT = (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080").replace("https://", "wss://").replace("http://", "ws://");
 
 const agentsMd = `# Hyperindex API - Complete Integration Guide for AI Agents
 

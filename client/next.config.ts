@@ -26,10 +26,6 @@ const nextConfig: NextConfig = {
         destination: `${apiUrl}/graphql`,
       },
       {
-        source: "/graphiql",
-        destination: `${apiUrl}/graphiql`,
-      },
-      {
         source: "/oauth/:path*",
         destination: `${apiUrl}/oauth/:path*`,
       },
