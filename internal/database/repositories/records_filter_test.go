@@ -534,14 +534,115 @@ func TestGetByCollectionSortedWithKeysetCursor_SortAndFilters(t *testing.T) {
 	}
 }
 
+func TestBuildFilterClause_LIKEEscape(t *testing.T) {
+	repo := newTestRepo(t)
+
+	tests := []struct {
+		name       string
+		operator   string
+		value      string
+		wantParam  string // expected SQL parameter value
+		wantEscape bool   // clause must contain ESCAPE
+	}{
+		{
+			name:       "contains with percent is escaped",
+			operator:   "contains",
+			value:      "100%",
+			wantParam:  `%100\%%`,
+			wantEscape: true,
+		},
+		{
+			name:       "contains with underscore is escaped",
+			operator:   "contains",
+			value:      "test_value",
+			wantParam:  `%test\_value%`,
+			wantEscape: true,
+		},
+		{
+			name:       "contains with backslash is escaped",
+			operator:   "contains",
+			value:      `path\to`,
+			wantParam:  `%path\\to%`,
+			wantEscape: true,
+		},
+		{
+			name:       "contains with no special chars is unchanged",
+			operator:   "contains",
+			value:      "hello",
+			wantParam:  "%hello%",
+			wantEscape: true,
+		},
+		{
+			name:       "startsWith with percent is escaped",
+			operator:   "startsWith",
+			value:      "100%",
+			wantParam:  `100\%%`,
+			wantEscape: true,
+		},
+		{
+			name:       "startsWith with underscore is escaped",
+			operator:   "startsWith",
+			value:      "test_",
+			wantParam:  `test\_%`,
+			wantEscape: true,
+		},
+		{
+			name:       "startsWith with backslash is escaped",
+			operator:   "startsWith",
+			value:      `C:\Users`,
+			wantParam:  `C:\\Users%`,
+			wantEscape: true,
+		},
+		{
+			name:       "startsWith with no special chars is unchanged",
+			operator:   "startsWith",
+			value:      "hello",
+			wantParam:  "hello%",
+			wantEscape: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filters := []FieldFilter{
+				{Field: "title", Operator: tt.operator, Value: tt.value, FieldType: "string"},
+			}
+			clause, params, err := repo.buildFilterClause(filters, 1)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if clause == "" {
+				t.Fatalf("clause is empty")
+			}
+
+			// Verify ESCAPE clause is present
+			if tt.wantEscape && !strings.Contains(clause, "ESCAPE") {
+				t.Errorf("clause = %q, want to contain ESCAPE", clause)
+			}
+
+			// Verify the parameter value is correctly escaped
+			if len(params) != 1 {
+				t.Fatalf("expected 1 param, got %d", len(params))
+			}
+			tv, ok := params[0].(database.TextValue)
+			if !ok {
+				t.Fatalf("param is not TextValue, got %T", params[0])
+			}
+			if string(tv) != tt.wantParam {
+				t.Errorf("param = %q, want %q", string(tv), tt.wantParam)
+			}
+		})
+	}
+}
+
 func TestBuildFilterClause_INLimit(t *testing.T) {
 	repo := newTestRepo(t)
 
 	tests := []struct {
-		name      string
-		values    []interface{}
-		wantErr   bool
-		wantCond  string // expected condition substring (when no error)
+		name     string
+		values   []interface{}
+		wantErr  bool
+		wantCond string // expected condition substring (when no error)
 	}{
 		{
 			name:     "0 values returns 1 = 0",
@@ -556,8 +657,8 @@ func TestBuildFilterClause_INLimit(t *testing.T) {
 			wantCond: "IN (",
 		},
 		{
-			name:    "100 values (boundary) succeeds",
-			values:  func() []interface{} {
+			name: "100 values (boundary) succeeds",
+			values: func() []interface{} {
 				vals := make([]interface{}, 100)
 				for i := range vals {
 					vals[i] = i
@@ -568,8 +669,8 @@ func TestBuildFilterClause_INLimit(t *testing.T) {
 			wantCond: "IN (",
 		},
 		{
-			name:    "101 values (over limit) returns error",
-			values:  func() []interface{} {
+			name: "101 values (over limit) returns error",
+			values: func() []interface{} {
 				vals := make([]interface{}, 101)
 				for i := range vals {
 					vals[i] = i

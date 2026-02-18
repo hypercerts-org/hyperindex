@@ -52,6 +52,19 @@ type FieldFilter struct {
 	FieldType string      // Lexicon type: "string", "integer", "number", "boolean", "datetime"
 }
 
+// DIDFilter represents a filter on the did column.
+// Only eq and in are supported (column-level filter, not JSON).
+// If both EQ and IN are set, EQ takes precedence.
+type DIDFilter struct {
+	EQ string   // Exact match (empty means no eq filter)
+	IN []string // In list (nil/empty means no in filter)
+}
+
+// IsEmpty reports whether the DIDFilter has no conditions set.
+func (d DIDFilter) IsEmpty() bool {
+	return d.EQ == "" && len(d.IN) == 0
+}
+
 // SortOption specifies a sort field and direction for record queries.
 type SortOption struct {
 	Field     string // Field name. If "indexed_at", "uri", "did", "collection", "cid", "rkey" — use column directly. Otherwise, use JSONExtract.
@@ -402,13 +415,21 @@ func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceh
 			params = append(params, toDBValue(f.Value))
 			placeholderIdx++
 		case "contains":
-			conditions = append(conditions, fmt.Sprintf("%s LIKE %s", extract, r.db.Placeholder(placeholderIdx)))
-			val := fmt.Sprintf("%%%v%%", f.Value)
+			likeOp := "LIKE"
+			if r.db.Dialect() == database.PostgreSQL {
+				likeOp = "ILIKE"
+			}
+			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
+			val := fmt.Sprintf("%%%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
 			params = append(params, database.Text(val))
 			placeholderIdx++
 		case "startsWith":
-			conditions = append(conditions, fmt.Sprintf("%s LIKE %s", extract, r.db.Placeholder(placeholderIdx)))
-			val := fmt.Sprintf("%v%%", f.Value)
+			likeOp := "LIKE"
+			if r.db.Dialect() == database.PostgreSQL {
+				likeOp = "ILIKE"
+			}
+			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
+			val := fmt.Sprintf("%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
 			params = append(params, database.Text(val))
 			placeholderIdx++
 		case "isNull":
