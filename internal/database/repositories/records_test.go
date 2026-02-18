@@ -962,3 +962,173 @@ func TestRecordsRepository_IterateAll(t *testing.T) {
 		}
 	})
 }
+
+func TestRecordsRepository_Search(t *testing.T) {
+	tests := []struct {
+		name           string
+		setup          func(*repositories.RecordsRepository)
+		query          string
+		collection     string
+		limit          int
+		afterTimestamp string
+		afterURI       string
+		wantCount      int
+		wantURIs       []string
+	}{
+		{
+			name: "returns records containing search term",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sr1", "bafyreisr1", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sr2", "bafyreisr2", "did:plc:test1", "app.bsky.feed.post", `{"text":"goodbye world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sr3", "bafyreisr3", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello again"}`)
+			},
+			query:     "hello",
+			limit:     10,
+			wantCount: 2,
+		},
+		{
+			name: "search with collection filter narrows results",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sc1", "bafyreisc1", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello post"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.like/sc2", "bafyreisc2", "did:plc:test1", "app.bsky.feed.like", `{"text":"hello like"}`)
+			},
+			query:      "hello",
+			collection: "app.bsky.feed.post",
+			limit:      10,
+			wantCount:  1,
+		},
+		{
+			name: "search returns no results when term not found",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sn1", "bafyreisn1", "did:plc:test1", "app.bsky.feed.post", `{"text":"nothing here"}`)
+			},
+			query:     "xyzzy",
+			limit:     10,
+			wantCount: 0,
+		},
+		{
+			name: "search is case-insensitive",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/si1", "bafyreisi1", "did:plc:test1", "app.bsky.feed.post", `{"text":"Hello World"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/si2", "bafyreisi2", "did:plc:test1", "app.bsky.feed.post", `{"text":"HELLO WORLD"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/si3", "bafyreisi3", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello world"}`)
+			},
+			query:     "hello",
+			limit:     10,
+			wantCount: 3,
+		},
+		{
+			name: "search with pagination limit",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sp1", "bafyreisp1", "did:plc:test1", "app.bsky.feed.post", `{"text":"paginate me one"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sp2", "bafyreisp2", "did:plc:test1", "app.bsky.feed.post", `{"text":"paginate me two"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sp3", "bafyreisp3", "did:plc:test1", "app.bsky.feed.post", `{"text":"paginate me three"}`)
+			},
+			query:     "paginate",
+			limit:     2,
+			wantCount: 2,
+		},
+		{
+			name: "search escapes percent wildcard in query",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sw1", "bafyreisw1", "did:plc:test1", "app.bsky.feed.post", `{"text":"100% complete"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/sw2", "bafyreisw2", "did:plc:test1", "app.bsky.feed.post", `{"text":"anything else"}`)
+			},
+			query:     "100%",
+			limit:     10,
+			wantCount: 1,
+		},
+		{
+			name: "search escapes underscore wildcard in query",
+			setup: func(repo *repositories.RecordsRepository) {
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/su1", "bafyreisu1", "did:plc:test1", "app.bsky.feed.post", `{"text":"hello_world"}`)
+				insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/su2", "bafyreisu2", "did:plc:test1", "app.bsky.feed.post", `{"text":"helloXworld"}`)
+			},
+			query:     "hello_world",
+			limit:     10,
+			wantCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := setupRecordsTest(t)
+			ctx := context.Background()
+
+			if tt.setup != nil {
+				tt.setup(repo)
+			}
+
+			records, err := repo.Search(ctx, tt.query, tt.collection, tt.limit, tt.afterTimestamp, tt.afterURI)
+			if err != nil {
+				t.Fatalf("Search() error: %v", err)
+			}
+			if len(records) != tt.wantCount {
+				t.Errorf("Search() returned %d records, want %d", len(records), tt.wantCount)
+			}
+
+			// Verify specific URIs if provided
+			if len(tt.wantURIs) > 0 {
+				uriSet := make(map[string]bool)
+				for _, rec := range records {
+					uriSet[rec.URI] = true
+				}
+				for _, uri := range tt.wantURIs {
+					if !uriSet[uri] {
+						t.Errorf("Search() missing expected URI %s", uri)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestRecordsRepository_Search_Pagination(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	repo := env.repo
+	ctx := context.Background()
+
+	sqlDB := env.db.Executor.DB()
+
+	// Insert records with distinct indexed_at timestamps
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/pg1", "bafyreipg1", "did:plc:test1", "app.bsky.feed.post", `{"text":"search term alpha"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/pg1'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/pg2", "bafyreipg2", "did:plc:test1", "app.bsky.feed.post", `{"text":"search term beta"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/pg2'`)
+
+	insertTestRecord(t, repo, "at://did:plc:test1/app.bsky.feed.post/pg3", "bafyreipg3", "did:plc:test1", "app.bsky.feed.post", `{"text":"search term gamma"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:test1/app.bsky.feed.post/pg3'`)
+
+	t.Run("first page returns newest first", func(t *testing.T) {
+		records, err := repo.Search(ctx, "search term", "", 2, "", "")
+		if err != nil {
+			t.Fatalf("Search() error: %v", err)
+		}
+		if len(records) != 2 {
+			t.Fatalf("got %d records, want 2", len(records))
+		}
+		// Newest first: pg3, pg2
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/pg3" {
+			t.Errorf("first record URI = %q, want pg3", records[0].URI)
+		}
+		if records[1].URI != "at://did:plc:test1/app.bsky.feed.post/pg2" {
+			t.Errorf("second record URI = %q, want pg2", records[1].URI)
+		}
+	})
+
+	t.Run("second page with keyset cursor returns older records", func(t *testing.T) {
+		// Cursor after pg2 (indexed_at=2026-01-15T11:00:00Z)
+		records, err := repo.Search(ctx, "search term", "", 10,
+			"2026-01-15T11:00:00Z", "at://did:plc:test1/app.bsky.feed.post/pg2")
+		if err != nil {
+			t.Fatalf("Search() error: %v", err)
+		}
+		if len(records) != 1 {
+			t.Fatalf("got %d records, want 1", len(records))
+		}
+		if records[0].URI != "at://did:plc:test1/app.bsky.feed.post/pg1" {
+			t.Errorf("record URI = %q, want pg1", records[0].URI)
+		}
+	})
+}

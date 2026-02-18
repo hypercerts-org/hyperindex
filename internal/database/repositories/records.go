@@ -36,6 +36,14 @@ type Record struct {
 	RKey       string
 }
 
+// FieldFilter represents a single filter condition on a JSON field.
+type FieldFilter struct {
+	Field     string      // JSON field name (e.g., "title", "createdAt"). Must be a valid field name.
+	Operator  string      // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
+	Value     interface{} // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
+	FieldType string      // Lexicon type: "string", "integer", "number", "boolean", "datetime"
+}
+
 // CollectionStat represents statistics for a collection.
 type CollectionStat struct {
 	Collection string
@@ -327,6 +335,178 @@ func (r *RecordsRepository) GetByCollectionWithKeysetCursor(ctx context.Context,
 	return scanRecords(rows)
 }
 
+// buildFilterClause builds a SQL WHERE clause fragment from a slice of FieldFilters.
+// startPlaceholder is the 1-based index of the first placeholder to use.
+// Returns the clause string (without leading "AND") and the parameter values.
+// Returns an empty string and nil params if filters is empty.
+func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceholder int) (string, []database.Value) {
+	if len(filters) == 0 {
+		return "", nil
+	}
+
+	var conditions []string
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+
+	for _, f := range filters {
+		extract := r.db.JSONExtract("json", f.Field)
+
+		// Wrap numeric types in a CAST for proper comparison
+		isNumeric := f.FieldType == "integer" || f.FieldType == "number"
+		if isNumeric {
+			switch r.db.Dialect() {
+			case database.PostgreSQL:
+				extract = fmt.Sprintf("(%s)::numeric", extract)
+			default:
+				extract = fmt.Sprintf("CAST(%s AS REAL)", extract)
+			}
+		}
+
+		switch f.Operator {
+		case "eq":
+			conditions = append(conditions, fmt.Sprintf("%s = %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "neq":
+			conditions = append(conditions, fmt.Sprintf("%s != %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "gt":
+			conditions = append(conditions, fmt.Sprintf("%s > %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "lt":
+			conditions = append(conditions, fmt.Sprintf("%s < %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "gte":
+			conditions = append(conditions, fmt.Sprintf("%s >= %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "lte":
+			conditions = append(conditions, fmt.Sprintf("%s <= %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "contains":
+			conditions = append(conditions, fmt.Sprintf("%s LIKE %s", extract, r.db.Placeholder(placeholderIdx)))
+			val := fmt.Sprintf("%%%v%%", f.Value)
+			params = append(params, database.Text(val))
+			placeholderIdx++
+		case "startsWith":
+			conditions = append(conditions, fmt.Sprintf("%s LIKE %s", extract, r.db.Placeholder(placeholderIdx)))
+			val := fmt.Sprintf("%v%%", f.Value)
+			params = append(params, database.Text(val))
+			placeholderIdx++
+		case "isNull":
+			isNull, _ := f.Value.(bool)
+			if isNull {
+				conditions = append(conditions, fmt.Sprintf("%s IS NULL", extract))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s IS NOT NULL", extract))
+			}
+		case "in":
+			inVals, _ := f.Value.([]interface{})
+			if len(inVals) == 0 {
+				// Empty IN list — always false
+				conditions = append(conditions, "1 = 0")
+				continue
+			}
+			placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
+			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", extract, placeholders))
+			for _, v := range inVals {
+				params = append(params, toDBValue(v))
+				placeholderIdx++
+			}
+		}
+	}
+
+	return strings.Join(conditions, " AND "), params
+}
+
+// toDBValue converts an interface{} value to a database.Value.
+func toDBValue(v interface{}) database.Value {
+	switch val := v.(type) {
+	case string:
+		return database.Text(val)
+	case int:
+		return database.Int(int64(val))
+	case int64:
+		return database.Int(val)
+	case float64:
+		return database.Float(val)
+	case bool:
+		return database.Bool(val)
+	case nil:
+		return database.Null()
+	default:
+		return database.Text(fmt.Sprintf("%v", val))
+	}
+}
+
+// GetByCollectionFilteredWithKeysetCursor retrieves records for a collection with
+// optional field-level filters and keyset-based pagination.
+// Filters are applied as AND conditions on JSON fields.
+// If did is non-empty, results are further filtered to that DID.
+// Records are ordered by (indexed_at DESC, uri DESC).
+func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	did string,
+	limit int,
+	afterTimestamp string,
+	afterURI string,
+) ([]*Record, error) {
+	// Build the base WHERE clause
+	// collection = ? is always param 1
+	var whereParts []string
+	var args []any
+
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	args = append(args, collection)
+
+	nextPlaceholder := 2
+
+	// Keyset cursor condition
+	if afterTimestamp != "" && afterURI != "" {
+		p2 := r.db.Placeholder(nextPlaceholder)
+		p3 := r.db.Placeholder(nextPlaceholder + 1)
+		p4 := r.db.Placeholder(nextPlaceholder + 2)
+		whereParts = append(whereParts, fmt.Sprintf("(indexed_at < %s OR (indexed_at = %s AND uri < %s))", p2, p3, p4))
+		args = append(args, afterTimestamp, afterTimestamp, afterURI)
+		nextPlaceholder += 3
+	}
+
+	// Field filters
+	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		for _, p := range filterParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+			nextPlaceholder++
+		}
+	}
+
+	// DID filter
+	if did != "" {
+		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
+		args = append(args, did)
+		nextPlaceholder++
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
+		r.recordColumns(), whereClause, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query filtered records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
+}
+
 // GetByDID retrieves all records for a specific DID.
 func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record, error) {
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY indexed_at DESC",
@@ -589,6 +769,75 @@ func (r *RecordsRepository) GetExistingCIDs(ctx context.Context, cids []string) 
 	}
 
 	return result, nil
+}
+
+// escapeLIKE escapes special LIKE wildcard characters (%, _) in a user-provided search string.
+// This prevents wildcard injection where user input could match unintended patterns.
+func escapeLIKE(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
+// Search performs a LIKE-based text search on record JSON content.
+// On PostgreSQL, uses case-insensitive ILIKE. On SQLite, LIKE is already case-insensitive for ASCII.
+// collection is optional; if empty, searches across all collections.
+// Supports keyset pagination via afterTimestamp and afterURI.
+func (r *RecordsRepository) Search(
+	ctx context.Context,
+	searchQuery string,
+	collection string,
+	limit int,
+	afterTimestamp string,
+	afterURI string,
+) ([]*Record, error) {
+	escaped := escapeLIKE(searchQuery)
+	likeValue := "%" + escaped + "%"
+
+	var conditions []string
+	var params []database.Value
+	paramIdx := 1
+
+	// JSON LIKE/ILIKE condition
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		conditions = append(conditions, fmt.Sprintf("json::text ILIKE %s ESCAPE '\\'", r.db.Placeholder(paramIdx)))
+	default:
+		conditions = append(conditions, fmt.Sprintf("json LIKE %s ESCAPE '\\'", r.db.Placeholder(paramIdx)))
+	}
+	params = append(params, database.Text(likeValue))
+	paramIdx++
+
+	// Optional collection filter
+	if collection != "" {
+		conditions = append(conditions, fmt.Sprintf("collection = %s", r.db.Placeholder(paramIdx)))
+		params = append(params, database.Text(collection))
+		paramIdx++
+	}
+
+	// Keyset cursor
+	if afterTimestamp != "" && afterURI != "" {
+		conditions = append(conditions, fmt.Sprintf(
+			"(indexed_at < %s OR (indexed_at = %s AND uri < %s))",
+			r.db.Placeholder(paramIdx),
+			r.db.Placeholder(paramIdx+1),
+			r.db.Placeholder(paramIdx+2),
+		))
+		params = append(params, database.Text(afterTimestamp), database.Text(afterTimestamp), database.Text(afterURI))
+	}
+
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
+	sqlStr := fmt.Sprintf("SELECT %s FROM record %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
+		r.recordColumns(), whereClause, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
 }
 
 // Helper functions

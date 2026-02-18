@@ -588,6 +588,86 @@ func (b *Builder) resolveRecordConnection(
 	}, nil
 }
 
+// createSearchResolver creates a resolver for the search query.
+// It validates the query string (minimum 2 characters) and calls the Search repository method.
+func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
+	return func(p graphql.ResolveParams) (interface{}, error) {
+		searchQuery, _ := p.Args["query"].(string)
+		if len(searchQuery) < 2 {
+			return nil, fmt.Errorf("search query must be at least 2 characters")
+		}
+
+		collection, _ := p.Args["collection"].(string)
+
+		firstArg, _ := p.Args["first"].(int)
+		first := query.ClampPageSize(firstArg)
+
+		after, _ := p.Args["after"].(string)
+
+		var afterTimestamp, afterURI string
+		if after != "" {
+			var err error
+			afterTimestamp, afterURI, err = decodeCursor(after)
+			if err != nil {
+				return nil, fmt.Errorf("invalid cursor: %w", err)
+			}
+		}
+
+		repos := resolver.GetRepositories(p.Context)
+		if repos == nil || repos.Records == nil {
+			return emptyConnection(), nil
+		}
+
+		records, err := repos.Records.Search(p.Context, searchQuery, collection, first+1, afterTimestamp, afterURI)
+		if err != nil {
+			return nil, fmt.Errorf("failed to search records: %w", err)
+		}
+
+		hasNextPage := len(records) > first
+		if hasNextPage {
+			records = records[:first]
+		}
+
+		edges := make([]interface{}, 0, len(records))
+		var startCursor, endCursor string
+
+		for _, rec := range records {
+			var value map[string]interface{}
+			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+				continue
+			}
+
+			cursor := encodeCursor(rec.IndexedAt.Format("2006-01-02T15:04:05Z"), rec.URI)
+			if startCursor == "" {
+				startCursor = cursor
+			}
+			endCursor = cursor
+
+			edges = append(edges, map[string]interface{}{
+				"cursor": cursor,
+				"node": map[string]interface{}{
+					"uri":        rec.URI,
+					"cid":        rec.CID,
+					"did":        rec.DID,
+					"collection": rec.Collection,
+					"rkey":       rec.RKey,
+					"value":      value,
+				},
+			})
+		}
+
+		return map[string]interface{}{
+			"edges": edges,
+			"pageInfo": map[string]interface{}{
+				"hasNextPage":     hasNextPage,
+				"hasPreviousPage": after != "",
+				"startCursor":     startCursor,
+				"endCursor":       endCursor,
+			},
+		}, nil
+	}
+}
+
 // createGenericRecordsResolver creates a resolver for the generic records query.
 func (b *Builder) createGenericRecordsResolver() graphql.FieldResolveFn {
 	return func(p graphql.ResolveParams) (interface{}, error) {
