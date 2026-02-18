@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -37,6 +38,7 @@ import (
 	"github.com/GainForest/hypergoat/internal/lexicon"
 	"github.com/GainForest/hypergoat/internal/oauth"
 	"github.com/GainForest/hypergoat/internal/server"
+	"github.com/GainForest/hypergoat/internal/tap"
 	"github.com/GainForest/hypergoat/internal/workers"
 )
 
@@ -70,6 +72,8 @@ type backgroundServices struct {
 	workersCancel      context.CancelFunc
 	jsConsumer         *jetstream.Consumer
 	jsCancel           context.CancelFunc
+	tapConsumer        *tap.Consumer
+	tapCancel          context.CancelFunc
 }
 
 // Stop cleanly shuts down all background services.
@@ -85,6 +89,12 @@ func (bg *backgroundServices) Stop() {
 	}
 	if bg.jsCancel != nil {
 		bg.jsCancel()
+	}
+	if bg.tapConsumer != nil {
+		bg.tapConsumer.Stop()
+	}
+	if bg.tapCancel != nil {
+		bg.tapCancel()
 	}
 }
 
@@ -134,11 +144,16 @@ func run() error {
 	// Start background workers (activity cleanup)
 	startWorkers(svc, bg)
 
-	// Start Jetstream consumer for real-time events
-	startJetstream(cfg, svc, pubsub, collections, adminHandler, bg)
+	if cfg.TapEnabled {
+		// Start Tap consumer instead of Jetstream+Backfill
+		startTap(cfg, svc, pubsub, adminHandler, bg)
+	} else {
+		// Start Jetstream consumer for real-time events
+		startJetstream(cfg, svc, pubsub, collections, adminHandler, bg)
 
-	// Start backfill if configured
-	startBackfill(cfg, svc)
+		// Start backfill if configured
+		startBackfill(cfg, svc)
+	}
 
 	// Run HTTP server with graceful shutdown
 	return serve(r, cfg, bg)
@@ -737,6 +752,56 @@ func startBackfill(cfg *config.Config, svc *services) {
 			)
 		}
 	}()
+}
+
+// startTap creates and starts the Tap consumer as a replacement for Jetstream+Backfill.
+// It also wires admin backfill callbacks to use Tap's /repos/add HTTP API.
+func startTap(
+	cfg *config.Config,
+	svc *services,
+	pubsub *subscription.PubSub,
+	adminHandler *admin.Handler,
+	bg *backgroundServices,
+) {
+	tapURL := cfg.TapURL
+
+	// Create handler that stores records and publishes to subscriptions.
+	handler := tap.NewIndexHandler(svc.records, svc.actors, svc.activity, pubsub)
+
+	// Create consumer.
+	consumer := tap.NewConsumer(tap.ConsumerConfig{
+		TapURL:      tapURL,
+		DisableAcks: cfg.TapDisableAcks,
+	}, handler)
+
+	// Store consumer reference for clean shutdown.
+	bg.tapConsumer = consumer
+
+	tapCtx, tapCancel := context.WithCancel(context.Background())
+	bg.tapCancel = tapCancel
+
+	go func() {
+		slog.Info("Starting Tap consumer", "url", tapURL, "disable_acks", cfg.TapDisableAcks)
+		if err := consumer.Start(tapCtx); err != nil {
+			slog.Error("Tap consumer error", "error", err)
+		}
+	}()
+
+	// Wire admin backfill callbacks to use Tap's /repos/add API.
+	if adminHandler != nil {
+		tapHTTPURL := strings.Replace(strings.Replace(tapURL, "ws://", "http://", 1), "wss://", "https://", 1)
+		adminClient := tap.NewAdminClient(tapHTTPURL, cfg.TapAdminPassword)
+
+		adminHandler.Resolver().SetBackfillCallback(func(ctx context.Context, did string) error {
+			return adminClient.AddRepos(ctx, []string{did})
+		})
+
+		adminHandler.Resolver().SetFullBackfillCallback(func(_ context.Context) error {
+			return fmt.Errorf("full network backfill not supported via Tap admin API — configure TAP_SIGNAL_COLLECTION or TAP_FULL_NETWORK on the Tap sidecar instead")
+		})
+	}
+
+	slog.Info("Tap consumer started (replaces Jetstream + Backfill)")
 }
 
 // serve starts the HTTP server and blocks until a shutdown signal is received,
