@@ -44,6 +44,12 @@ type FieldFilter struct {
 	FieldType string      // Lexicon type: "string", "integer", "number", "boolean", "datetime"
 }
 
+// SortOption specifies a sort field and direction for record queries.
+type SortOption struct {
+	Field     string // Field name. If "indexed_at", "uri", "did", "collection", "cid", "rkey" — use column directly. Otherwise, use JSONExtract.
+	Direction string // "ASC" or "DESC"
+}
+
 // CollectionStat represents statistics for a collection.
 type CollectionStat struct {
 	Collection string
@@ -507,6 +513,143 @@ func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
 	return scanRecords(rows)
 }
 
+// directSortColumns is the set of column names that can be used directly in ORDER BY
+// without JSON extraction.
+var directSortColumns = map[string]bool{
+	"indexed_at": true,
+	"uri":        true,
+	"did":        true,
+	"collection": true,
+	"cid":        true,
+	"rkey":       true,
+}
+
+// buildSortExpr builds the ORDER BY expression for a given SortOption.
+// If sort is nil, returns the default "indexed_at DESC, uri DESC".
+// If sort.Field is a direct column, uses it as-is; otherwise uses JSONExtract.
+// Always appends ", uri <direction>" as a tiebreaker unless the sort field IS uri.
+// The uri tiebreaker direction matches the primary sort direction.
+func (r *RecordsRepository) buildSortExpr(sort *SortOption) string {
+	if sort == nil {
+		return "indexed_at DESC, uri DESC"
+	}
+
+	dir := sort.Direction
+	if dir != "ASC" && dir != "DESC" {
+		dir = "DESC"
+	}
+
+	var fieldExpr string
+	if directSortColumns[sort.Field] {
+		fieldExpr = sort.Field
+	} else {
+		fieldExpr = r.db.JSONExtract("json", sort.Field)
+	}
+
+	expr := fmt.Sprintf("%s %s", fieldExpr, dir)
+
+	// Append uri tiebreaker unless the primary sort field is already uri
+	if sort.Field != "uri" {
+		expr += fmt.Sprintf(", uri %s", dir)
+	}
+
+	return expr
+}
+
+// GetByCollectionSortedWithKeysetCursor retrieves records for a collection with
+// optional field-level filters, a configurable sort order, and keyset-based pagination.
+// The sort field and direction are specified via the sort parameter (nil = default indexed_at DESC).
+// afterCursorValues is [sortFieldValue, uri] for keyset pagination; empty means first page.
+// If did is non-empty, results are further filtered to that DID.
+func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	did string,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+) ([]*Record, error) {
+	var whereParts []string
+	var args []any
+
+	// collection = ? is always param 1
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	args = append(args, collection)
+
+	nextPlaceholder := 2
+
+	// Keyset cursor condition
+	if len(afterCursorValues) == 2 {
+		afterSortVal := afterCursorValues[0]
+		afterURI := afterCursorValues[1]
+
+		// Determine the sort field expression and comparison operator
+		var sortFieldExpr string
+		if sort == nil || directSortColumns[sort.Field] {
+			if sort == nil {
+				sortFieldExpr = "indexed_at"
+			} else {
+				sortFieldExpr = sort.Field
+			}
+		} else {
+			sortFieldExpr = r.db.JSONExtract("json", sort.Field)
+		}
+
+		// DESC uses <, ASC uses >
+		var cmp string
+		if sort == nil || sort.Direction == "DESC" {
+			cmp = "<"
+		} else {
+			cmp = ">"
+		}
+
+		p1 := r.db.Placeholder(nextPlaceholder)
+		p2 := r.db.Placeholder(nextPlaceholder + 1)
+		p3 := r.db.Placeholder(nextPlaceholder + 2)
+
+		// Composite keyset: (sortField op afterSortVal) OR (sortField = afterSortVal AND uri op afterURI)
+		whereParts = append(whereParts, fmt.Sprintf(
+			"(%s %s %s OR (%s = %s AND uri %s %s))",
+			sortFieldExpr, cmp, p1,
+			sortFieldExpr, p2,
+			cmp, p3,
+		))
+		args = append(args, afterSortVal, afterSortVal, afterURI)
+		nextPlaceholder += 3
+	}
+
+	// Field filters
+	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		for _, p := range filterParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+			nextPlaceholder++
+		}
+	}
+
+	// DID filter
+	if did != "" {
+		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
+		args = append(args, did)
+		nextPlaceholder++
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	orderBy := r.buildSortExpr(sort)
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
+		r.recordColumns(), whereClause, orderBy, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sorted records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
+}
+
 // GetByDID retrieves all records for a specific DID.
 func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record, error) {
 	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY indexed_at DESC",
@@ -538,6 +681,48 @@ func (r *RecordsRepository) DeleteAll(ctx context.Context) error {
 func (r *RecordsRepository) GetCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.QueryRow(ctx, "SELECT COUNT(*) FROM record", nil, &count)
+	return count, err
+}
+
+// GetCollectionCount returns the total record count for a collection.
+func (r *RecordsRepository) GetCollectionCount(ctx context.Context, collection string) (int64, error) {
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE collection = %s", r.db.Placeholder(1))
+	var count int64
+	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(collection)}, &count)
+	return count, err
+}
+
+// GetCollectionCountFiltered returns the count with optional DID and field filters applied.
+func (r *RecordsRepository) GetCollectionCountFiltered(
+	ctx context.Context, collection string, filters []FieldFilter, did string,
+) (int64, error) {
+	var whereParts []string
+	var params []database.Value
+
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	params = append(params, database.Text(collection))
+
+	nextPlaceholder := 2
+
+	// Field filters
+	filterClause, filterParams := r.buildFilterClause(filters, nextPlaceholder)
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		params = append(params, filterParams...)
+		nextPlaceholder += len(filterParams)
+	}
+
+	// DID filter
+	if did != "" {
+		whereParts = append(whereParts, fmt.Sprintf("did = %s", r.db.Placeholder(nextPlaceholder)))
+		params = append(params, database.Text(did))
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE %s", whereClause)
+
+	var count int64
+	err := r.db.QueryRow(ctx, sqlStr, params, &count)
 	return count, err
 }
 

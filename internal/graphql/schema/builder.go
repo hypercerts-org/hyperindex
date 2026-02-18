@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/graphql-go/graphql"
+	"github.com/graphql-go/graphql/language/ast"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/graphql/query"
@@ -377,8 +378,9 @@ var genericRecordEdgeType = graphql.NewObject(graphql.ObjectConfig{
 var genericRecordConnectionType = graphql.NewObject(graphql.ObjectConfig{
 	Name: "GenericRecordConnection",
 	Fields: graphql.Fields{
-		"edges":    &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
-		"pageInfo": &graphql.Field{Type: query.PageInfoType},
+		"edges":      &graphql.Field{Type: graphql.NewList(genericRecordEdgeType)},
+		"pageInfo":   &graphql.Field{Type: query.PageInfoType},
+		"totalCount": &graphql.Field{Type: graphql.Int, Description: "Total number of items (if known)"},
 	},
 })
 
@@ -575,6 +577,22 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 	return filters, didFilter
 }
 
+// isTotalCountRequested checks whether the GraphQL query selected the totalCount field.
+// This is used to avoid executing an expensive COUNT query when totalCount is not needed.
+func isTotalCountRequested(p graphql.ResolveParams) bool {
+	for _, field := range p.Info.FieldASTs {
+		if field.SelectionSet == nil {
+			continue
+		}
+		for _, sel := range field.SelectionSet.Selections {
+			if f, ok := sel.(*ast.Field); ok && f.Name.Value == "totalCount" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // resolveRecordConnection is the shared implementation for paginated record queries.
 // It uses deterministic keyset pagination with a composite (indexed_at, uri) cursor.
 func (b *Builder) resolveRecordConnection(
@@ -648,7 +666,7 @@ func (b *Builder) resolveRecordConnection(
 		})
 	}
 
-	return map[string]interface{}{
+	result := map[string]interface{}{
 		"edges": edges,
 		"pageInfo": map[string]interface{}{
 			"hasNextPage":     hasNextPage,
@@ -656,7 +674,16 @@ func (b *Builder) resolveRecordConnection(
 			"startCursor":     startCursor,
 			"endCursor":       endCursor,
 		},
-	}, nil
+	}
+
+	if isTotalCountRequested(p) {
+		count, err := repos.Records.GetCollectionCountFiltered(p.Context, collection, filters, didFilter)
+		if err == nil {
+			result["totalCount"] = int(count)
+		}
+	}
+
+	return result, nil
 }
 
 // createSearchResolver creates a resolver for the search query.
