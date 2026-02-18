@@ -26,9 +26,10 @@ type Builder struct {
 	objectBuilder *types.ObjectBuilder
 
 	// Built types
-	recordTypes     map[string]*graphql.Object // lexiconID -> record type
-	connectionTypes map[string]*graphql.Object // lexiconID -> connection type
-	sortFieldEnums  map[string]*graphql.Enum   // lexiconID -> sort field enum
+	recordTypes     map[string]*graphql.Object      // lexiconID -> record type
+	connectionTypes map[string]*graphql.Object      // lexiconID -> connection type
+	sortFieldEnums  map[string]*graphql.Enum        // lexiconID -> sort field enum
+	whereInputTypes map[string]*graphql.InputObject // lexiconID -> where input type
 }
 
 // NewBuilder creates a new schema builder.
@@ -41,6 +42,7 @@ func NewBuilder(registry *lexicon.Registry) *Builder {
 		recordTypes:     make(map[string]*graphql.Object),
 		connectionTypes: make(map[string]*graphql.Object),
 		sortFieldEnums:  make(map[string]*graphql.Enum),
+		whereInputTypes: make(map[string]*graphql.InputObject),
 	}
 }
 
@@ -51,6 +53,9 @@ func (b *Builder) Build() (*graphql.Schema, error) {
 
 	// Phase 2: Build all record types
 	b.buildRecordTypes()
+
+	// Phase 2b: Build per-collection WhereInput types
+	b.buildWhereInputTypes()
 
 	// Phase 3: Build connection types
 	b.buildConnectionTypes()
@@ -141,6 +146,46 @@ func (b *Builder) buildSortFieldEnums() {
 
 		sortEnum := query.BuildSortFieldEnum(recordType.Name(), sortableProps)
 		b.sortFieldEnums[lex.ID] = sortEnum
+	}
+}
+
+// buildWhereInputTypes builds per-collection WhereInput GraphQL InputObject types.
+// For each collection lexicon, it creates a WhereInput type with a field for each
+// filterable property (string, integer, number, boolean, datetime) plus a `did` field.
+func (b *Builder) buildWhereInputTypes() {
+	for _, lex := range b.registry.GetCollectionLexicons() {
+		if lex.Defs.Main == nil {
+			continue
+		}
+
+		typeName := lexicon.ToTypeName(lex.ID) + "WhereInput"
+		fields := graphql.InputObjectConfigFieldMap{}
+
+		// Always include did as a filterable metadata field
+		fields["did"] = &graphql.InputObjectFieldConfig{
+			Type:        types.StringFilterInput,
+			Description: "Filter by DID (record author)",
+		}
+
+		// Add a field for each filterable property
+		for _, entry := range lex.Defs.Main.Properties {
+			filterInput := types.FilterInputForLexiconType(entry.Property.Type, entry.Property.Format)
+			if filterInput == nil {
+				continue // Non-filterable type (array, ref, union, blob, unknown, etc.)
+			}
+			fields[entry.Name] = &graphql.InputObjectFieldConfig{
+				Type:        filterInput,
+				Description: fmt.Sprintf("Filter by %s", entry.Name),
+			}
+		}
+
+		whereInput := graphql.NewInputObject(graphql.InputObjectConfig{
+			Name:        typeName,
+			Description: fmt.Sprintf("Filter conditions for %s queries", lex.ID),
+			Fields:      fields,
+		})
+
+		b.whereInputTypes[lex.ID] = whereInput
 	}
 }
 
@@ -363,6 +408,30 @@ func (b *Builder) buildQueryType() *graphql.Object {
 		Resolve: b.createGenericRecordsResolver(),
 	}
 
+	// Add search query for cross-collection text search
+	fields["search"] = &graphql.Field{
+		Type:        genericRecordConnectionType,
+		Description: "Search records by text content",
+		Args: graphql.FieldConfigArgument{
+			"query": &graphql.ArgumentConfig{
+				Type:        graphql.NewNonNull(graphql.String),
+				Description: "Search text (matched against record JSON content)",
+			},
+			"collection": &graphql.ArgumentConfig{
+				Type:        graphql.String,
+				Description: "Optional collection NSID to restrict search",
+			},
+			"first": &graphql.ArgumentConfig{
+				Type:         graphql.Int,
+				DefaultValue: 20,
+			},
+			"after": &graphql.ArgumentConfig{
+				Type: graphql.String,
+			},
+		},
+		Resolve: b.createSearchResolver(),
+	}
+
 	// Add collectionStats query for efficient aggregate counts
 	fields["collectionStats"] = &graphql.Field{
 		Type:        graphql.NewNonNull(graphql.NewList(graphql.NewNonNull(collectionStatType))),
@@ -402,6 +471,12 @@ func (b *Builder) buildQueryType() *graphql.Object {
 			args["sortDirection"] = &graphql.ArgumentConfig{
 				Type:        query.SortDirectionEnum,
 				Description: "Sort direction (default: DESC)",
+			}
+		}
+		if whereInput, ok := b.whereInputTypes[lexiconID]; ok {
+			args["where"] = &graphql.ArgumentConfig{
+				Type:        whereInput,
+				Description: "Filter conditions",
 			}
 		}
 
