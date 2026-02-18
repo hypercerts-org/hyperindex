@@ -44,7 +44,6 @@ func loadLexiconsFromDir(dir string) ([]*lexicon.Lexicon, error) {
 	return lexicons, err
 }
 
-
 // TestEncodeDecode verifies that encodeCursorValues and decodeCursorValues
 // correctly round-trip values, handle pipe characters in values, and maintain
 // backward compatibility with the legacy pipe-delimited format.
@@ -390,4 +389,168 @@ func TestSchemaIntrospection(t *testing.T) {
 
 	jsonResult, _ := json.MarshalIndent(result.Data, "", "  ")
 	t.Logf("Introspection result:\n%s", jsonResult)
+}
+
+// buildReservedCollisionLexicon creates a Lexicon whose main record definition
+// contains properties that collide with reserved metadata field names.
+func buildReservedCollisionLexicon(id string, collidingProps []string) *lexicon.Lexicon {
+	props := []lexicon.PropertyEntry{
+		// A normal, non-colliding property that must always appear.
+		{
+			Name: "title",
+			Property: lexicon.Property{
+				Type: "string",
+			},
+		},
+	}
+	for _, name := range collidingProps {
+		props = append(props, lexicon.PropertyEntry{
+			Name: name,
+			Property: lexicon.Property{
+				// Use integer so we can detect if the metadata field (String!) was replaced.
+				Type:        "integer",
+				Description: "Colliding property — must be skipped",
+			},
+		})
+	}
+	return &lexicon.Lexicon{
+		ID: id,
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type:       "record",
+				Key:        "tid",
+				Properties: props,
+			},
+		},
+	}
+}
+
+func TestBuildRecordType_ReservedFieldCollision(t *testing.T) {
+	tests := []struct {
+		name      string
+		colliding string // reserved property name the lexicon tries to define
+	}{
+		{name: "uri collision", colliding: "uri"},
+		{name: "did collision", colliding: "did"},
+		{name: "cid collision", colliding: "cid"},
+		{name: "rkey collision", colliding: "rkey"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexiconID := "com.example.reserved." + tt.colliding
+
+			lex := buildReservedCollisionLexicon(lexiconID, []string{tt.colliding})
+			registry := lexicon.NewRegistry()
+			registry.Register(lex)
+
+			builder := NewBuilder(registry)
+			_, err := builder.Build()
+			if err != nil {
+				t.Fatalf("Build() failed: %v", err)
+			}
+
+			recordType := builder.GetRecordType(lexiconID)
+			if recordType == nil {
+				t.Fatal("record type not found after Build()")
+			}
+
+			fields := recordType.Fields()
+
+			// The reserved metadata field must still be present and be NonNull String.
+			metaField, ok := fields[tt.colliding]
+			if !ok {
+				t.Fatalf("metadata field %q is missing from the type", tt.colliding)
+			}
+			if metaField.Type.String() != "String!" {
+				t.Errorf("metadata field %q type = %q, want %q (lexicon property must not overwrite it)",
+					tt.colliding, metaField.Type.String(), "String!")
+			}
+
+			// The normal non-colliding property must still be present.
+			if _, ok := fields["title"]; !ok {
+				t.Error("non-colliding property 'title' is missing from the type")
+			}
+		})
+	}
+}
+
+func TestBuildWhereInput_ReservedFieldCollision(t *testing.T) {
+	tests := []struct {
+		name      string
+		colliding string // reserved property name the lexicon tries to define
+	}{
+		{name: "uri collision in WhereInput", colliding: "uri"},
+		{name: "cid collision in WhereInput", colliding: "cid"},
+		{name: "rkey collision in WhereInput", colliding: "rkey"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lexiconID := "com.example.whereinput." + tt.colliding
+
+			lex := buildReservedCollisionLexicon(lexiconID, []string{tt.colliding})
+			registry := lexicon.NewRegistry()
+			registry.Register(lex)
+
+			builder := NewBuilder(registry)
+			_, err := builder.Build()
+			if err != nil {
+				t.Fatalf("Build() failed: %v", err)
+			}
+
+			whereInput, ok := builder.whereInputTypes[lexiconID]
+			if !ok {
+				t.Fatal("WhereInput type not found after Build()")
+			}
+
+			inputFields := whereInput.Fields()
+
+			// The colliding property must NOT appear as a filter field in the WhereInput.
+			// (The reserved metadata field "uri"/"cid"/"rkey" is not added to WhereInput
+			// by default — only "did" is added as a metadata filter.)
+			// So the colliding property should simply be absent.
+			if _, exists := inputFields[tt.colliding]; exists {
+				t.Errorf("WhereInput has field %q which should have been skipped (reserved name collision)", tt.colliding)
+			}
+
+			// The normal non-colliding property must still appear as a filter.
+			if _, exists := inputFields["title"]; !exists {
+				t.Error("non-colliding property 'title' is missing from WhereInput")
+			}
+		})
+	}
+}
+
+func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
+	// A lexicon with a "did" property must not result in a duplicate "did" filter.
+	// The "did" metadata filter is always added; the lexicon property "did" must be skipped.
+	lexiconID := "com.example.whereinput.did"
+
+	lex := buildReservedCollisionLexicon(lexiconID, []string{"did"})
+	registry := lexicon.NewRegistry()
+	registry.Register(lex)
+
+	builder := NewBuilder(registry)
+	_, err := builder.Build()
+	if err != nil {
+		t.Fatalf("Build() failed: %v", err)
+	}
+
+	whereInput, ok := builder.whereInputTypes[lexiconID]
+	if !ok {
+		t.Fatal("WhereInput type not found after Build()")
+	}
+
+	inputFields := whereInput.Fields()
+
+	// "did" must appear exactly once (as the metadata filter).
+	if _, exists := inputFields["did"]; !exists {
+		t.Error("WhereInput is missing the 'did' metadata filter field")
+	}
+
+	// "title" must still appear.
+	if _, exists := inputFields["title"]; !exists {
+		t.Error("non-colliding property 'title' is missing from WhereInput")
+	}
 }
