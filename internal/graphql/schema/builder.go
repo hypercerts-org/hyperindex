@@ -539,10 +539,10 @@ type nodeBuilder func(rec *repositories.Record, value map[string]interface{}) (i
 // than a JSON field filter. DIDFilterInput only exposes "eq" and "in", so only
 // those operators are handled. All other keys are looked up in the lexicon registry
 // to determine the correct FieldType for SQL casting.
-func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter) {
+func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, repositories.DIDFilter, error) {
 	whereMap, ok := whereArg.(map[string]interface{})
 	if !ok || len(whereMap) == 0 {
-		return nil, repositories.DIDFilter{}
+		return nil, repositories.DIDFilter{}, nil
 	}
 
 	var filters []repositories.FieldFilter
@@ -560,6 +560,7 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 		if fieldName == "did" {
 			// DID is a column filter, not a JSON field filter.
 			// DIDFilterInput only exposes "eq" and "in".
+			// The DID filter does not count toward MaxFilterConditions.
 			if eqVal, ok := filterMap["eq"].(string); ok && eqVal != "" {
 				didFilter.EQ = eqVal
 			}
@@ -599,7 +600,11 @@ func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Re
 		}
 	}
 
-	return filters, didFilter
+	if len(filters) > repositories.MaxFilterConditions {
+		return nil, repositories.DIDFilter{}, fmt.Errorf("too many filter conditions: %d (maximum %d)", len(filters), repositories.MaxFilterConditions)
+	}
+
+	return filters, didFilter, nil
 }
 
 // isTotalCountRequested checks whether the GraphQL query selected the totalCount field.
@@ -687,7 +692,11 @@ func (b *Builder) resolveRecordConnection(
 	var filters []repositories.FieldFilter
 	var didFilter repositories.DIDFilter
 	if whereArg, ok := p.Args["where"]; ok && whereArg != nil {
-		filters, didFilter = extractFilters(whereArg, collection, b.registry)
+		var err error
+		filters, didFilter, err = extractFilters(whereArg, collection, b.registry)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// Extract sort args if present (typed collection queries only)

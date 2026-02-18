@@ -31,6 +31,10 @@ const (
 	// SQLite has a hard 999 parameter limit (SQLITE_MAX_VARIABLE_NUMBER).
 	// We cap well below that to leave room for other query parameters.
 	MaxINListSize = 100
+
+	// MaxFilterConditions is the maximum number of individual filter conditions allowed per query.
+	// The DID filter does not count toward this cap.
+	MaxFilterConditions = 20
 )
 
 // Record represents an AT Protocol record stored in the database.

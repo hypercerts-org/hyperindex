@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/graphql-go/graphql"
 
+	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/lexicon"
 )
 
@@ -605,7 +607,10 @@ func TestExtractFilters_DIDFilter(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			filters, didFilter := extractFilters(tt.whereArg, "com.example.test", registry)
+			filters, didFilter, err := extractFilters(tt.whereArg, "com.example.test", registry)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
 
 			if didFilter.EQ != tt.wantDIDEQ {
 				t.Errorf("DIDFilter.EQ = %q, want %q", didFilter.EQ, tt.wantDIDEQ)
@@ -723,5 +728,76 @@ func TestBuildWhereInput_DidHandledSeparately(t *testing.T) {
 	// "title" must still appear.
 	if _, exists := inputFields["title"]; !exists {
 		t.Error("non-colliding property 'title' is missing from WhereInput")
+	}
+}
+
+// TestExtractFilters_MaxFilterConditions verifies that extractFilters enforces the
+// MaxFilterConditions cap and that the DID filter does not count toward the cap.
+func TestExtractFilters_MaxFilterConditions(t *testing.T) {
+	registry := lexicon.NewRegistry()
+
+	// Helper to build a whereArg with n distinct field filters (each with one operator).
+	buildFieldFilters := func(n int) map[string]interface{} {
+		m := map[string]interface{}{}
+		for i := 0; i < n; i++ {
+			m[fmt.Sprintf("field%d", i)] = map[string]interface{}{"eq": "value"}
+		}
+		return m
+	}
+
+	tests := []struct {
+		name        string
+		whereArg    interface{}
+		wantErr     bool
+		wantErrMsg  string
+		wantFilters int
+	}{
+		{
+			name:        "zero filter conditions succeeds",
+			whereArg:    map[string]interface{}{},
+			wantFilters: 0,
+		},
+		{
+			name:        "exactly MaxFilterConditions succeeds",
+			whereArg:    buildFieldFilters(repositories.MaxFilterConditions),
+			wantFilters: repositories.MaxFilterConditions,
+		},
+		{
+			name:       "one over MaxFilterConditions returns error",
+			whereArg:   buildFieldFilters(repositories.MaxFilterConditions + 1),
+			wantErr:    true,
+			wantErrMsg: "too many filter conditions",
+		},
+		{
+			name: "DID filter does not count toward cap",
+			whereArg: func() map[string]interface{} {
+				// MaxFilterConditions field filters + a DID filter: should still succeed.
+				m := buildFieldFilters(repositories.MaxFilterConditions)
+				m["did"] = map[string]interface{}{"eq": "did:plc:abc"}
+				return m
+			}(),
+			wantFilters: repositories.MaxFilterConditions,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			filters, _, err := extractFilters(tt.whereArg, "com.example.test", registry)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErrMsg)
+				}
+				if tt.wantErrMsg != "" && !strings.Contains(err.Error(), tt.wantErrMsg) {
+					t.Errorf("error = %q, want it to contain %q", err.Error(), tt.wantErrMsg)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(filters) != tt.wantFilters {
+				t.Errorf("len(filters) = %d, want %d", len(filters), tt.wantFilters)
+			}
+		})
 	}
 }
