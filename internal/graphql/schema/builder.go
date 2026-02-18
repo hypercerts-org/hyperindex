@@ -511,6 +511,70 @@ func (b *Builder) buildQueryType() *graphql.Object {
 // nodeBuilder transforms a Record and its parsed JSON into a GraphQL node.
 type nodeBuilder func(rec *repositories.Record, value map[string]interface{}) (interface{}, bool)
 
+// extractFilters extracts FieldFilter conditions and an optional DID filter from
+// the GraphQL `where` argument. The whereArg is expected to be a
+// map[string]interface{} where each key is a field name and each value is a
+// map[string]interface{} of operator→value pairs (e.g. {"eq": "hello"}).
+//
+// The special key "did" is extracted separately as a DID column filter rather
+// than a JSON field filter. All other keys are looked up in the lexicon registry
+// to determine the correct FieldType for SQL casting.
+func extractFilters(whereArg interface{}, lexiconID string, registry *lexicon.Registry) ([]repositories.FieldFilter, string) {
+	whereMap, ok := whereArg.(map[string]interface{})
+	if !ok || len(whereMap) == 0 {
+		return nil, ""
+	}
+
+	var filters []repositories.FieldFilter
+	var didFilter string
+
+	// Look up the record definition once for property type resolution
+	recordDef, _ := registry.GetRecordDef(lexiconID)
+
+	for fieldName, filterVal := range whereMap {
+		filterMap, ok := filterVal.(map[string]interface{})
+		if !ok || filterMap == nil {
+			continue
+		}
+
+		if fieldName == "did" {
+			// DID is a column filter, not a JSON field filter.
+			// Only "eq" is meaningful for DID filtering.
+			if eqVal, ok := filterMap["eq"].(string); ok && eqVal != "" {
+				didFilter = eqVal
+			}
+			continue
+		}
+
+		// Determine the lexicon type for this field so the repository can CAST correctly.
+		fieldType := "string" // default
+		if recordDef != nil {
+			if prop := recordDef.GetProperty(fieldName); prop != nil {
+				if prop.Format == "datetime" {
+					fieldType = "datetime"
+				} else {
+					fieldType = prop.Type
+				}
+			}
+		}
+
+		// Each key in filterMap is an operator (eq, neq, gt, lt, gte, lte, in, contains, startsWith, isNull).
+		for op, val := range filterMap {
+			if val == nil {
+				continue
+			}
+			filters = append(filters, repositories.FieldFilter{
+				Field:     fieldName,
+				Operator:  op,
+				Value:     val,
+				FieldType: fieldType,
+			})
+		}
+	}
+
+	return filters, didFilter
+}
+
 // resolveRecordConnection is the shared implementation for paginated record queries.
 // It uses deterministic keyset pagination with a composite (indexed_at, uri) cursor.
 func (b *Builder) resolveRecordConnection(
@@ -538,8 +602,15 @@ func (b *Builder) resolveRecordConnection(
 		}
 	}
 
+	// Extract where filters if present (typed collection queries only)
+	var filters []repositories.FieldFilter
+	var didFilter string
+	if whereArg, ok := p.Args["where"]; ok && whereArg != nil {
+		filters, didFilter = extractFilters(whereArg, collection, b.registry)
+	}
+
 	// Fetch first+1 to determine hasNextPage
-	records, err := repos.Records.GetByCollectionWithKeysetCursor(p.Context, collection, first+1, afterTimestamp, afterURI)
+	records, err := repos.Records.GetByCollectionFilteredWithKeysetCursor(p.Context, collection, filters, didFilter, first+1, afterTimestamp, afterURI)
 	if err != nil {
 		return nil, fmt.Errorf("failed to query records: %w", err)
 	}
