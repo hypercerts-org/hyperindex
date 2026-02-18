@@ -69,7 +69,7 @@ docker compose -f docker-compose.tap.yml up --build
 ```bash
 # Add a specific repo (DID) for Tap to index
 curl -X POST http://localhost:2480/repos/add \
-  -u ":${TAP_ADMIN_PASSWORD}" \
+  -u "admin:${TAP_ADMIN_PASSWORD}" \
   -H "Content-Type: application/json" \
   -d '{"dids": ["did:plc:your-did-here"]}'
 ```
@@ -88,7 +88,7 @@ TAP_SIGNAL_COLLECTION=app.bsky.feed.post docker compose -f docker-compose.tap.ym
 |----------|-------------|---------|
 | `TAP_ENABLED` | Enable Tap consumer (disables Jetstream+Backfill) | `false` |
 | `TAP_URL` | WebSocket URL of the Tap sidecar | `ws://localhost:2480` |
-| `TAP_ADMIN_PASSWORD` | Password for Tap's admin HTTP API | *(empty)* |
+| `TAP_ADMIN_PASSWORD` | Password for Tap's admin HTTP API | *(required for docker-compose.tap.yml)* |
 | `TAP_DISABLE_ACKS` | Disable ack-based delivery (useful for debugging) | `false` |
 | `TAP_SIGNAL_COLLECTION` | Collection NSID for auto-discovery of repos | *(empty)* |
 

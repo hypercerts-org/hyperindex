@@ -569,3 +569,96 @@ time=2026-02-18T17:11:50.837+08:00 level=INFO msg="JSONL content changed, procee
 time=2026-02-18T17:11:50.845+08:00 level=INFO msg="Imported from JSONL"
 time=2026-02-18T17:11:50.846+08:00 level=INFO msg="Auto-import complete"
 time=2026-02-18T17:11:54.000+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:11:54.051+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:11:54.051+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:11:54.162+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:11:54.213+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:11:54.213+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:11:55.216+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T17:11:55.216+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T17:11:55.221+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:11:56.097+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T17:11:56.097+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T17:11:56.097+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T17:11:56.224+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T17:11:56.224+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T17:11:56.941+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T17:11:56.941+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T17:11:56.942+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T17:12:11.280+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:11.332+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:11.332+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:11.716+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:11.767+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:11.767+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:12.201+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:12.252+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:12.252+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:12.468+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:12.519+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:12.519+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:12.739+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:12.790+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:12.790+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:12.869+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:13.871+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T17:12:13.872+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T17:12:13.882+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:14.616+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T17:12:14.616+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T17:12:14.616+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T17:12:14.884+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T17:12:14.885+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T17:12:15.674+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T17:12:15.674+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T17:12:15.674+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T17:12:16.347+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-xuq.3
+time=2026-02-18T17:12:16.551+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-xuq.6
+time=2026-02-18T17:12:17.010+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-xuq.2
+time=2026-02-18T17:12:17.512+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T17:12:17.512+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T17:12:17.521+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:17.523+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T17:12:17.523+08:00 level=INFO msg="Export complete"
+time=2026-02-18T17:12:17.572+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:17.572+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:17.908+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-xuq.1
+time=2026-02-18T17:12:18.384+08:00 level=INFO msg="Mutation detected" type=update issue_id=hyperindex-xuq.5
+time=2026-02-18T17:12:18.536+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:18.573+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T17:12:18.574+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T17:12:18.579+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:18.579+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T17:12:18.579+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T17:12:18.586+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:18.586+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:18.586+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:18.773+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:18.824+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:18.824+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:18.885+08:00 level=INFO msg="Export triggered by mutation events"
+time=2026-02-18T17:12:18.885+08:00 level=INFO msg=Starting mode=export
+time=2026-02-18T17:12:18.892+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:18.893+08:00 level=INFO msg="Exported to JSONL"
+time=2026-02-18T17:12:18.893+08:00 level=INFO msg="Export complete"
+time=2026-02-18T17:12:18.943+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:18.943+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:19.260+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T17:12:19.260+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T17:12:19.260+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T17:12:19.696+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:19.747+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:19.747+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:19.945+08:00 level=INFO msg="Import triggered by file change"
+time=2026-02-18T17:12:19.946+08:00 level=INFO msg="Starting auto-import" mode=auto-import
+time=2026-02-18T17:12:19.955+08:00 level=INFO msg="File change detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:19.970+08:00 level=INFO msg="WARNING: Uncommitted local changes detected" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:19.970+08:00 level=INFO msg="   Pulling from remote may overwrite local unpushed changes."
+time=2026-02-18T17:12:19.970+08:00 level=INFO msg="   Consider running 'bd sync' to commit and push your changes first."
+time=2026-02-18T17:12:20.327+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
+time=2026-02-18T17:12:20.378+08:00 level=INFO msg="Successfully re-established JSONL watch" delay=50ms
+time=2026-02-18T17:12:20.378+08:00 level=INFO msg="JSONL file created" path=/Users/david/Projects/gainforest/hyperindex/.beads/issues.jsonl
+time=2026-02-18T17:12:20.685+08:00 level=INFO msg="Pulled from remote"
+time=2026-02-18T17:12:20.685+08:00 level=INFO msg="🔍 Checking JSONL content hash AFTER pull (fix: auto-pull-not-pulling)"
+time=2026-02-18T17:12:20.686+08:00 level=INFO msg="Skipping: JSONL content unchanged" mode=auto-import
+time=2026-02-18T17:12:20.689+08:00 level=INFO msg="JSONL removed/renamed, re-establishing watch"
