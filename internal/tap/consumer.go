@@ -26,6 +26,11 @@ const (
 
 	// maxBackoff is the maximum reconnection backoff duration.
 	maxBackoff = 2 * time.Minute
+
+	// maxMessageSize is the maximum WebSocket message size accepted from the Tap server.
+	// AT Protocol records can be up to 1MB; 4MB gives headroom while preventing OOM from
+	// malicious or buggy servers sending arbitrarily large messages.
+	maxMessageSize = 4 * 1024 * 1024 // 4 MB
 )
 
 // ConsumerConfig configures the Tap consumer.
@@ -156,6 +161,7 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to connect to Tap: %w", err)
 	}
+	conn.SetReadLimit(maxMessageSize)
 
 	c.connMu.Lock()
 	c.conn = conn

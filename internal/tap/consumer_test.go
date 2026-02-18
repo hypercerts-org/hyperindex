@@ -614,6 +614,60 @@ func TestConsumer_BackoffResetsAfterSuccess(t *testing.T) {
 	consumer.Stop()
 }
 
+// TestConsumer_LargeMessageRejected verifies that a message exceeding maxMessageSize
+// causes a read error and triggers reconnection rather than OOM.
+func TestConsumer_LargeMessageRejected(t *testing.T) {
+	var connectionCount int32
+	secondConnected := make(chan struct{})
+
+	srv := newTestServer(t, func(conn *websocket.Conn) {
+		count := atomic.AddInt32(&connectionCount, 1)
+		switch count {
+		case 1:
+			// First connection: send a message larger than 4MB.
+			oversized := make([]byte, maxMessageSize+1)
+			for i := range oversized {
+				oversized[i] = 'x'
+			}
+			// The write may succeed on the server side; the client will reject it on read.
+			_ = conn.WriteMessage(websocket.TextMessage, oversized)
+			// Wait briefly for the client to close the connection.
+			_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+			conn.ReadMessage() //nolint:errcheck
+		case 2:
+			// Second connection: signal that the consumer reconnected successfully.
+			close(secondConnected)
+			// Keep open briefly.
+			time.Sleep(200 * time.Millisecond)
+		}
+	})
+	defer srv.Close()
+
+	handler := &mockHandler{}
+	consumer := NewConsumer(ConsumerConfig{TapURL: wsURL(srv.URL)}, handler)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	go func() {
+		_ = consumer.Start(ctx)
+	}()
+
+	// The consumer should reject the oversized message and reconnect.
+	select {
+	case <-secondConnected:
+		// Consumer reconnected after rejecting the large message — no OOM, no crash.
+	case <-time.After(8 * time.Second):
+		t.Fatal("consumer did not reconnect after receiving oversized message")
+	}
+
+	consumer.Stop()
+
+	if atomic.LoadInt32(&connectionCount) < 2 {
+		t.Errorf("expected at least 2 connections, got %d", atomic.LoadInt32(&connectionCount))
+	}
+}
+
 // TestConsumer_HandlerErrorDoesNotAck verifies that handler errors suppress acks.
 func TestConsumer_HandlerErrorDoesNotAck(t *testing.T) {
 	ackReceived := make(chan struct{})
