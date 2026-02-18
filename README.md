@@ -65,32 +65,94 @@ mutation {
 Access your indexed data at `/graphql`:
 
 ```graphql
-# Query records by collection
+# Generic query — all records by collection
 query {
-  records(collection: "app.bsky.feed.post") {
+  records(collection: "app.bsky.feed.post", first: 20) {
+    edges {
+      node { uri did collection value }
+      cursor
+    }
+    pageInfo { hasNextPage endCursor }
+    totalCount
+  }
+}
+
+# Typed queries — with filtering, sorting, and field-level access
+query {
+  appBskyFeedPost(
+    where: { text: { contains: "hello" }, did: { eq: "did:plc:..." } }
+    sortBy: "createdAt"
+    sortDirection: DESC
+    first: 10
+  ) {
     edges {
       node {
         uri
         did
-        value  # JSON record data
-      }
-    }
-  }
-}
-
-# With typed queries (when lexicon schemas are loaded)
-query {
-  appBskyFeedPost(first: 10, where: { did: { eq: "did:plc:..." } }) {
-    edges {
-      node {
-        uri
+        rkey
         text
         createdAt
       }
     }
+    totalCount
+    pageInfo { hasNextPage hasPreviousPage endCursor }
+  }
+}
+
+# Backward pagination
+query {
+  appBskyFeedPost(last: 10, before: "cursor_value") {
+    edges { node { uri text } }
+    pageInfo { hasPreviousPage startCursor }
+  }
+}
+
+# Cross-collection text search
+query {
+  search(query: "climate", collection: "app.bsky.feed.post", first: 20) {
+    edges {
+      node { uri did collection value }
+    }
   }
 }
 ```
+
+#### Filtering (`where`)
+
+Typed collection queries accept a `where` argument with per-field filters:
+
+| Operator | Types | Example |
+|----------|-------|---------|
+| `eq` | All | `{ title: { eq: "Hello" } }` |
+| `neq` | All | `{ status: { neq: "draft" } }` |
+| `gt`, `lt`, `gte`, `lte` | Int, Float, DateTime | `{ score: { gt: 5, lte: 100 } }` |
+| `in` | String, Int, Float | `{ type: { in: ["post", "reply"] } }` |
+| `contains` | String | `{ text: { contains: "forest" } }` |
+| `startsWith` | String | `{ name: { startsWith: "Gain" } }` |
+| `isNull` | All | `{ optionalField: { isNull: true } }` |
+
+Every `where` input also includes a `did` field for filtering by author DID.
+
+#### Sorting (`sortBy`, `sortDirection`)
+
+Typed queries support sorting by any scalar field:
+
+```graphql
+query {
+  appBskyFeedPost(sortBy: "createdAt", sortDirection: ASC, first: 10) {
+    edges { node { uri createdAt } }
+  }
+}
+```
+
+Default sort is `indexed_at DESC` (newest first). Available sort fields are generated per-collection from the lexicon schema.
+
+#### Pagination
+
+- **Forward**: `first` + `after` (default: 20, max: 100)
+- **Backward**: `last` + `before`
+- **`totalCount`**: Returned when requested (opt-in, computed only when selected)
+- Cannot use `first`/`after` and `last`/`before` simultaneously
 
 ## Endpoints
 
