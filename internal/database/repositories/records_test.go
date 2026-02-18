@@ -863,6 +863,139 @@ func TestRecordsRepository_GetExistingCIDs(t *testing.T) {
 	}
 }
 
+func TestRecordsRepository_GetByCollectionFilteredWithKeysetCursor(t *testing.T) {
+	env := setupRecordsTestEnv(t)
+	repo := env.repo
+	ctx := context.Background()
+
+	sqlDB := env.db.Executor.DB()
+
+	// Insert records with distinct indexed_at timestamps and varied JSON fields
+	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/f1", "bafyreif1", "did:plc:alice", "app.bsky.feed.post", `{"text":"hello world","score":10}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T10:00:00Z' WHERE uri = 'at://did:plc:alice/app.bsky.feed.post/f1'`)
+
+	insertTestRecord(t, repo, "at://did:plc:alice/app.bsky.feed.post/f2", "bafyreif2", "did:plc:alice", "app.bsky.feed.post", `{"text":"goodbye world","score":20}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T11:00:00Z' WHERE uri = 'at://did:plc:alice/app.bsky.feed.post/f2'`)
+
+	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/f3", "bafyreif3", "did:plc:bob", "app.bsky.feed.post", `{"text":"hello again"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T12:00:00Z' WHERE uri = 'at://did:plc:bob/app.bsky.feed.post/f3'`)
+
+	insertTestRecord(t, repo, "at://did:plc:bob/app.bsky.feed.post/f4", "bafyreif4", "did:plc:bob", "app.bsky.feed.post", `{"text":"no greeting"}`)
+	_, _ = sqlDB.ExecContext(ctx, `UPDATE record SET indexed_at = '2026-01-15T13:00:00Z' WHERE uri = 'at://did:plc:bob/app.bsky.feed.post/f4'`)
+
+	t.Run("no filters returns all records", func(t *testing.T) {
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", 100, "", "")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 4 {
+			t.Errorf("got %d records, want 4", len(records))
+		}
+	})
+
+	t.Run("filter by string eq", func(t *testing.T) {
+		filters := []repositories.FieldFilter{
+			{Field: "text", Operator: "eq", Value: "hello world", FieldType: "string"},
+		}
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 100, "", "")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 1 {
+			t.Fatalf("got %d records, want 1", len(records))
+		}
+		if records[0].URI != "at://did:plc:alice/app.bsky.feed.post/f1" {
+			t.Errorf("unexpected URI %q", records[0].URI)
+		}
+	})
+
+	t.Run("filter by isNull true returns records without field", func(t *testing.T) {
+		filters := []repositories.FieldFilter{
+			{Field: "score", Operator: "isNull", Value: true, FieldType: "integer"},
+		}
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 100, "", "")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		// f3 and f4 have no score field
+		if len(records) != 2 {
+			t.Errorf("got %d records, want 2", len(records))
+		}
+	})
+
+	t.Run("filter with DID omits when empty", func(t *testing.T) {
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "", 100, "", "")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 4 {
+			t.Errorf("got %d records, want 4 (no DID filter)", len(records))
+		}
+	})
+
+	t.Run("filter with DID adds AND did = ? when non-empty", func(t *testing.T) {
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", nil, "did:plc:alice", 100, "", "")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 2 {
+			t.Errorf("got %d records, want 2", len(records))
+		}
+		for _, rec := range records {
+			if rec.DID != "did:plc:alice" {
+				t.Errorf("unexpected DID %q, want did:plc:alice", rec.DID)
+			}
+		}
+	})
+
+	t.Run("filter with DID and field filter combined", func(t *testing.T) {
+		filters := []repositories.FieldFilter{
+			{Field: "text", Operator: "contains", Value: "hello", FieldType: "string"},
+		}
+		records, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "did:plc:alice", 100, "", "")
+		if err != nil {
+			t.Fatalf("error: %v", err)
+		}
+		if len(records) != 1 {
+			t.Fatalf("got %d records, want 1", len(records))
+		}
+		if records[0].URI != "at://did:plc:alice/app.bsky.feed.post/f1" {
+			t.Errorf("unexpected URI %q", records[0].URI)
+		}
+	})
+
+	t.Run("pagination with filters", func(t *testing.T) {
+		filters := []repositories.FieldFilter{
+			{Field: "text", Operator: "contains", Value: "hello", FieldType: "string"},
+		}
+		// f3 (2026-01-15T12:00:00Z) and f1 (2026-01-15T10:00:00Z) contain "hello"
+		// First page: limit 1 → f3 (newest)
+		page1, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 1, "", "")
+		if err != nil {
+			t.Fatalf("page1 error: %v", err)
+		}
+		if len(page1) != 1 {
+			t.Fatalf("page1: got %d records, want 1", len(page1))
+		}
+		if page1[0].URI != "at://did:plc:bob/app.bsky.feed.post/f3" {
+			t.Errorf("page1[0] URI = %q, want f3", page1[0].URI)
+		}
+
+		// Second page using cursor from f3
+		afterTS := page1[0].IndexedAt.UTC().Format("2006-01-02T15:04:05Z")
+		page2, err := repo.GetByCollectionFilteredWithKeysetCursor(ctx, "app.bsky.feed.post", filters, "", 1, afterTS, page1[0].URI)
+		if err != nil {
+			t.Fatalf("page2 error: %v", err)
+		}
+		if len(page2) != 1 {
+			t.Fatalf("page2: got %d records, want 1", len(page2))
+		}
+		if page2[0].URI != "at://did:plc:alice/app.bsky.feed.post/f1" {
+			t.Errorf("page2[0] URI = %q, want f1", page2[0].URI)
+		}
+	})
+}
+
 func TestRecordsRepository_IterateAll(t *testing.T) {
 	t.Run("empty database returns 0 processed", func(t *testing.T) {
 		repo := setupRecordsTest(t)
