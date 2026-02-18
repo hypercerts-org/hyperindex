@@ -702,6 +702,19 @@ func (h *capturingHandler) ErrorRecords() []slog.Record {
 	return errs
 }
 
+// WarnRecordsContaining returns all Warn-level records whose message contains substr.
+func (h *capturingHandler) WarnRecordsContaining(substr string) []slog.Record {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	var matches []slog.Record
+	for _, r := range h.records {
+		if r.Level == slog.LevelWarn && strings.Contains(r.Message, substr) {
+			matches = append(matches, r)
+		}
+	}
+	return matches
+}
+
 // TestConsumer_ShutdownNoSpuriousLog verifies that cancelling the context during
 // shutdown does not produce any Error-level log messages.
 func TestConsumer_ShutdownNoSpuriousLog(t *testing.T) {
@@ -759,6 +772,14 @@ func TestConsumer_ShutdownNoSpuriousLog(t *testing.T) {
 	if errRecords := capturing.ErrorRecords(); len(errRecords) > 0 {
 		for _, r := range errRecords {
 			t.Errorf("unexpected Error-level log during shutdown: %s", r.Message)
+		}
+	}
+
+	// Verify no Warn-level "closed unexpectedly" messages were emitted during shutdown.
+	// These would indicate the else branch fired without checking ctx.Err() first.
+	if warnRecords := capturing.WarnRecordsContaining("unexpectedly"); len(warnRecords) > 0 {
+		for _, r := range warnRecords {
+			t.Errorf("unexpected Warn-level 'unexpectedly' log during shutdown: %s", r.Message)
 		}
 	}
 }

@@ -123,11 +123,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 		default:
 		}
 
+		// If context was cancelled, this is a graceful shutdown — do not log.
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
 		if err != nil {
-			// If the context was cancelled, the error is expected — don't log it as an error.
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
 			slog.Warn("Tap connection lost, will reconnect",
 				"error", err,
 				"backoff", backoff,
