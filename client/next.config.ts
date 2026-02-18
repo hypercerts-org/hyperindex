@@ -1,6 +1,8 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // Enable standalone output for Docker deployment
+  output: "standalone",
   // Allow external images from Bluesky CDN
   images: {
     remotePatterns: [
@@ -11,7 +13,7 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  // Proxy API requests to Hypergoat backend during development
+  // Proxy API requests to Hyperindex backend during development
   async rewrites() {
     const apiUrl = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080";
     return [
