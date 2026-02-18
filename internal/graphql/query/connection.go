@@ -5,6 +5,24 @@ import (
 	"github.com/graphql-go/graphql"
 )
 
+const (
+	// DefaultPageSize is the number of records returned when no first argument is provided.
+	DefaultPageSize = 20
+	// MaxPageSize is the maximum number of records that can be requested in a single page.
+	MaxPageSize = 100
+)
+
+// ClampPageSize returns a valid page size within [1, MaxPageSize], defaulting to DefaultPageSize.
+func ClampPageSize(first int) int {
+	if first <= 0 {
+		return DefaultPageSize
+	}
+	if first > MaxPageSize {
+		return MaxPageSize
+	}
+	return first
+}
+
 // PageInfoType defines the Relay-style pagination info GraphQL type.
 var PageInfoType = graphql.NewObject(graphql.ObjectConfig{
 	Name:        "PageInfo",
