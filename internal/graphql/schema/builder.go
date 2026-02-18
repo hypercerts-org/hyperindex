@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 
 	"github.com/graphql-go/graphql"
@@ -398,9 +399,8 @@ func (b *Builder) buildQueryType() *graphql.Object {
 				Description: "Collection NSID (e.g., org.impactindexer.review.like)",
 			},
 			"first": &graphql.ArgumentConfig{
-				Type:         graphql.Int,
-				DefaultValue: 20,
-				Description:  "Number of records to return",
+				Type:        graphql.Int,
+				Description: "Number of records to return (default 20, max 100)",
 			},
 			"after": &graphql.ArgumentConfig{
 				Type:        graphql.String,
@@ -720,6 +720,7 @@ func (b *Builder) resolveRecordConnection(
 		for _, rec := range records {
 			var value map[string]interface{}
 			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 				continue
 			}
 
@@ -796,7 +797,8 @@ func (b *Builder) resolveRecordConnection(
 	for _, rec := range records {
 		var value map[string]interface{}
 		if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
-			continue // Skip records with invalid JSON
+			slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
+			continue
 		}
 
 		node, ok := buildNode(rec, value)
@@ -882,6 +884,7 @@ func (b *Builder) createSearchResolver() graphql.FieldResolveFn {
 		for _, rec := range records {
 			var value map[string]interface{}
 			if err := json.Unmarshal([]byte(rec.JSON), &value); err != nil {
+				slog.Warn("Skipping record with invalid JSON", "uri", rec.URI, "error", err)
 				continue
 			}
 
