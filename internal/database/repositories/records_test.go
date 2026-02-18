@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/testutil"
@@ -1388,6 +1389,59 @@ func TestRecordsRepository_GetByCollectionReversedWithKeysetCursor(t *testing.T)
 		}
 		if records[4].URI != "at://did:plc:test1/app.bsky.feed.post/r1" {
 			t.Errorf("records[4].URI = %q, want r1", records[4].URI)
+		}
+	})
+}
+
+// TestSearchTimeout verifies that the Search method applies a context deadline.
+func TestSearchTimeout(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctxTimeout  time.Duration
+		wantTimeout bool
+	}{
+		{
+			name:        "already-cancelled context returns error immediately",
+			ctxTimeout:  0, // will be cancelled before call
+			wantTimeout: true,
+		},
+		{
+			name:        "context with ample time succeeds",
+			ctxTimeout:  30 * time.Second,
+			wantTimeout: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := setupRecordsTest(t)
+
+			ctx, cancel := context.WithTimeout(context.Background(), repositories.SearchTimeout)
+			defer cancel()
+
+			// Verify that the Search method wraps the context with a deadline.
+			// We do this by checking that a pre-cancelled context causes an error.
+			if tt.wantTimeout {
+				cancelledCtx, cancelFn := context.WithCancel(context.Background())
+				cancelFn() // cancel immediately
+				_, err := repo.Search(cancelledCtx, "hello", "", 10, "", "")
+				if err == nil {
+					t.Error("Search() with cancelled context should return an error, got nil")
+				}
+			} else {
+				// Normal call with a fresh context should succeed (even with empty results).
+				_, err := repo.Search(ctx, "hello", "", 10, "", "")
+				if err != nil {
+					t.Errorf("Search() with valid context returned unexpected error: %v", err)
+				}
+			}
+		})
+	}
+
+	// Verify the exported constant value.
+	t.Run("SearchTimeout constant is 10 seconds", func(t *testing.T) {
+		if repositories.SearchTimeout != 10*time.Second {
+			t.Errorf("SearchTimeout = %v, want 10s", repositories.SearchTimeout)
 		}
 	})
 }

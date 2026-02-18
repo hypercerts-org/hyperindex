@@ -23,6 +23,9 @@ const (
 
 	// DefaultIterateBatchSize is the default batch size for IterateAll when none specified.
 	DefaultIterateBatchSize = 1000
+
+	// SearchTimeout is the maximum duration for a search query.
+	SearchTimeout = 10 * time.Second
 )
 
 // Record represents an AT Protocol record stored in the database.
@@ -1100,6 +1103,9 @@ func (r *RecordsRepository) Search(
 	afterTimestamp string,
 	afterURI string,
 ) ([]*Record, error) {
+	ctx, cancel := context.WithTimeout(ctx, SearchTimeout)
+	defer cancel()
+
 	escaped := escapeLIKE(searchQuery)
 	likeValue := "%" + escaped + "%"
 
