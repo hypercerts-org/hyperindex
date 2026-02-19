@@ -1,0 +1,7 @@
+{
+  "last_failure": "2026-02-19T20:17:16.677024+08:00",
+  "failure_count": 1,
+  "backoff_until": "2026-02-19T20:17:46.677024+08:00",
+  "needs_manual_sync": false,
+  "failure_reason": "git pull failed: exit status 1\nFrom https://github.com/hypercerts-org/hyperindex\n * branch            tap-feature -\u003e FETCH_HEAD\n   fb5c723..ae64fae  tap-feature -\u003e origin/tap-feature\nerror: fetching ref refs/remotes/origin/tap-feature failed: incorrect old value provided\n"
+}
