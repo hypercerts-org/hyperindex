@@ -244,6 +244,7 @@ export default function LexiconsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const [deletingNsid, setDeletingNsid] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [batchPending, setBatchPending] = useState(false);
 
   const { data, isLoading, error: fetchError } = useQuery({
     queryKey: ["lexicons"],
@@ -253,17 +254,6 @@ export default function LexiconsPage() {
   const registerMutation = useMutation({
     mutationFn: (nsid: string) =>
       graphqlClient.request(REGISTER_LEXICON, { nsid }),
-    onSuccess: (_, nsid) => {
-      setSuccess(`Registered ${nsid}`);
-      setError(null);
-      setNsidInput("");
-      queryClient.invalidateQueries({ queryKey: ["lexicons"] });
-      setTimeout(() => setSuccess(null), 3000);
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-      setSuccess(null);
-    },
   });
 
   const deleteMutation = useMutation({
@@ -284,18 +274,54 @@ export default function LexiconsPage() {
     onSettled: () => setDeletingNsid(null),
   });
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
-    const trimmed = nsidInput.trim();
-    if (!trimmed) return;
+    if (!nsidInput.trim()) return;
 
-    if (!isValidNsid(trimmed)) {
-      setError("Invalid NSID format. Expected something like org.example.record.type");
+    // Split by commas, newlines, or whitespace; trim and filter empty
+    const nsids = [...new Set(
+      nsidInput.split(/[,\n\s]+/).map((s) => s.trim()).filter(Boolean)
+    )];
+
+    // Validate all NSIDs before submitting any
+    const invalidNsids = nsids.filter((nsid) => !isValidNsid(nsid));
+    if (invalidNsids.length > 0) {
+      setError(`Invalid NSID format: ${invalidNsids.join(", ")}`);
       return;
     }
 
     setError(null);
-    registerMutation.mutate(trimmed);
+    setBatchPending(true);
+
+    let completed = 0;
+    let firstError: string | null = null;
+
+    for (const nsid of nsids) {
+      try {
+        await registerMutation.mutateAsync(nsid);
+        completed++;
+        if (completed < nsids.length) {
+          setSuccess(`Registered ${completed}/${nsids.length} lexicons...`);
+        }
+      } catch (err) {
+        firstError = (err as Error).message;
+        setError(`Failed to register ${nsid}: ${firstError}`);
+        break;
+      }
+    }
+
+    setBatchPending(false);
+
+    if (completed > 0) {
+      queryClient.invalidateQueries({ queryKey: ["lexicons"] });
+      if (!firstError) {
+        setNsidInput("");
+        setSuccess(`Registered ${completed} lexicon${completed !== 1 ? "s" : ""}`);
+        setTimeout(() => setSuccess(null), 3000);
+      } else {
+        setSuccess(`Registered ${completed}/${nsids.length} lexicons (stopped on error)`);
+      }
+    }
   };
 
   const filteredLexicons = useMemo(() => {
@@ -342,28 +368,29 @@ export default function LexiconsPage() {
       {success && <Alert variant="success">{success}</Alert>}
 
       {/* Register */}
-      <form onSubmit={handleRegister} className="flex gap-2">
-        <input
-          type="text"
+      <form onSubmit={handleRegister} className="flex gap-2 items-start">
+        <textarea
           value={nsidInput}
           onChange={(e) => {
             setNsidInput(e.target.value);
             setError(null);
           }}
-          placeholder="Enter NSID to register..."
-          className="flex-1 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all"
+          placeholder="Enter NSIDs (comma or newline separated)..."
+          rows={1}
+          className="flex-1 px-3 py-1.5 rounded-lg text-sm font-mono focus:outline-none focus:ring-1 transition-all resize-y"
           style={{
             backgroundColor: "var(--card)",
             borderColor: "var(--border)",
             color: "var(--foreground)",
             border: "1px solid var(--border)",
+            minHeight: "2.25rem",
           }}
         />
         <Button
           type="submit"
           variant="primary"
-          disabled={registerMutation.isPending || !nsidInput.trim()}
-          loading={registerMutation.isPending}
+          disabled={batchPending || !nsidInput.trim()}
+          loading={batchPending}
         >
           Register
         </Button>
