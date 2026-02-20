@@ -64,7 +64,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Write response
 	w.Header().Set("Content-Type", "application/json")
-	if len(result.Errors) > 0 {
+	// Per GraphQL over HTTP spec: return 200 for partial errors (data + errors),
+	// only return 400 when the request could not be executed at all (data is nil).
+	if len(result.Errors) > 0 && result.Data == nil {
 		w.WriteHeader(http.StatusBadRequest)
 	}
 	_ = json.NewEncoder(w).Encode(result)

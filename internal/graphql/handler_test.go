@@ -3,6 +3,7 @@ package graphql
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -215,6 +216,66 @@ func TestHandler_ServeHTTP_GraphQLError(t *testing.T) {
 
 	if result["errors"] == nil {
 		t.Error("expected errors in response")
+	}
+}
+
+func TestHandler_ServeHTTP_PartialErrors(t *testing.T) {
+	// A schema where one field succeeds and another returns an error.
+	// A query that returns data alongside errors should get HTTP 200
+	// (this mirrors what happens with union type resolution errors).
+	queryType := graphqlgo.NewObject(graphqlgo.ObjectConfig{
+		Name: "Query",
+		Fields: graphqlgo.Fields{
+			"ok": &graphqlgo.Field{
+				Type: graphqlgo.String,
+				Resolve: func(p graphqlgo.ResolveParams) (interface{}, error) {
+					return "value", nil
+				},
+			},
+			"broken": &graphqlgo.Field{
+				Type: graphqlgo.String,
+				Resolve: func(p graphqlgo.ResolveParams) (interface{}, error) {
+					return nil, fmt.Errorf("resolver error")
+				},
+			},
+		},
+	})
+
+	schema, err := graphqlgo.NewSchema(graphqlgo.SchemaConfig{
+		Query: queryType,
+	})
+	if err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+
+	handler := &Handler{schema: &schema, repos: nil}
+
+	body := map[string]interface{}{
+		"query": "{ ok broken }",
+	}
+	bodyBytes, _ := json.Marshal(body)
+
+	req := httptest.NewRequest(http.MethodPost, "/graphql", bytes.NewReader(bodyBytes))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.ServeHTTP(w, req)
+
+	// Partial errors (data + errors) must return 200, not 400
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d for partial errors, got %d", http.StatusOK, w.Code)
+	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("failed to parse response: %v", err)
+	}
+
+	if result["errors"] == nil {
+		t.Error("expected errors in response body")
+	}
+	if result["data"] == nil {
+		t.Error("expected data in response body")
 	}
 }
 
