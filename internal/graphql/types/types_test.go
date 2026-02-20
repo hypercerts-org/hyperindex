@@ -312,6 +312,71 @@ func TestObjectBuilder_BuildRecordType_SkipsReservedFields(t *testing.T) {
 	}
 }
 
+// TestObjectBuilder_BuildUnionType_PrimitiveDefFallsBackToJSONScalar verifies that
+// when a union ref resolves to an ObjectDef with zero properties (i.e., a primitive-type
+// def like "type": "string" wrapped by the parser), the union falls back to JSONScalar
+// rather than creating a GraphQL Union with an empty object member.
+func TestObjectBuilder_BuildUnionType_PrimitiveDefFallsBackToJSONScalar(t *testing.T) {
+	registry := lexicon.NewRegistry()
+	mapper := NewMapper()
+	builder := NewObjectBuilder(mapper, registry)
+
+	// Register a lexicon that has:
+	//   - #contributorIdentity: a primitive "string" type, parsed as ObjectDef with zero properties
+	//   - main record with a union field referencing #contributorIdentity and a real object ref
+	lex := &lexicon.Lexicon{
+		ID: "org.example.test.activity",
+		Defs: lexicon.Defs{
+			Main: &lexicon.RecordDef{
+				Type: "record",
+				Key:  "tid",
+				Properties: []lexicon.PropertyEntry{
+					{
+						Name: "contributorIdentity",
+						Property: lexicon.Property{
+							Type: "union",
+							Refs: []string{"#contributorIdentity"},
+						},
+					},
+				},
+			},
+			Others: map[string]lexicon.Def{
+				"contributorIdentity": {
+					Type: "object",
+					// ObjectDef with zero properties simulates a primitive-type def
+					// (e.g., "type": "string") that the parser wraps as an ObjectDef.
+					Object: &lexicon.ObjectDef{
+						Type:       "string",
+						Properties: nil, // zero properties — this is the primitive-type case
+					},
+				},
+			},
+		},
+	}
+	registry.Register(lex)
+
+	// Build the record type — this triggers buildUnionType for contributorIdentity.
+	obj := builder.BuildRecordType("org.example.test.activity", lex.Defs.Main)
+	if obj == nil {
+		t.Fatal("BuildRecordType returned nil")
+	}
+
+	fields := obj.Fields()
+	field, ok := fields["contributorIdentity"]
+	if !ok {
+		t.Fatal("missing field 'contributorIdentity'")
+	}
+
+	// The field type must be JSONScalar (not a Union), because the only ref
+	// resolves to a zero-property ObjectDef (primitive-type def).
+	if field.Type.Name() != "JSON" {
+		t.Errorf("expected field type 'JSON' (JSONScalar), got %q", field.Type.Name())
+	}
+	if _, isUnion := field.Type.(*graphql.Union); isUnion {
+		t.Error("expected JSONScalar, got a GraphQL Union type — primitive-type def was not handled correctly")
+	}
+}
+
 func TestObjectBuilder_BuildObjectType(t *testing.T) {
 	registry := lexicon.NewRegistry()
 	mapper := NewMapper()

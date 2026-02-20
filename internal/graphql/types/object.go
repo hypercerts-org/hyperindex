@@ -235,6 +235,13 @@ func (b *ObjectBuilder) buildUnionType(contextLexiconID, fieldName string, refs 
 
 		switch def := resolved.(type) {
 		case *lexicon.ObjectDef:
+			// Primitive-type defs (e.g., "type": "string") get parsed as ObjectDefs
+			// with zero properties. Treat them as primitives in unions so the union
+			// falls back to JSONScalar for mixed primitive+object unions.
+			if len(def.Properties) == 0 {
+				hasPrimitives = true
+				continue
+			}
 			objType := b.BuildObjectType(fullRef, def)
 			objectTypes = append(objectTypes, objType)
 		case *lexicon.RecordDef:
