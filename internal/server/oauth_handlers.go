@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5/middleware"
+
 	"github.com/GainForest/hypergoat/internal/database"
 	"github.com/GainForest/hypergoat/internal/database/repositories"
 	"github.com/GainForest/hypergoat/internal/oauth"
@@ -897,15 +899,15 @@ func (h *OAuthHandlers) HandleJWKS(w http.ResponseWriter, r *http.Request) {
 	if h.config.SigningKey != nil {
 		jwk, err := h.config.SigningKey.ToJWK()
 		if err != nil {
-			slog.Warn("Failed to convert signing key to JWK for JWKS endpoint", "error", err)
-			h.writeJSON(w, http.StatusOK, jwks)
+			slog.Error("failed to convert signing key to JWK for JWKS endpoint", "error", err)
+			h.writeOAuthServerErrorWithRequestID(w, r)
 			return
 		}
 
 		kid, err := h.config.SigningKey.CalculateJKT()
 		if err != nil {
-			slog.Warn("Failed to compute signing key thumbprint for JWKS endpoint", "error", err)
-			h.writeJSON(w, http.StatusOK, jwks)
+			slog.Error("failed to compute signing key thumbprint for JWKS endpoint", "error", err)
+			h.writeOAuthServerErrorWithRequestID(w, r)
 			return
 		}
 
@@ -1030,6 +1032,19 @@ func (h *OAuthHandlers) writeOAuthError(w http.ResponseWriter, status int, error
 		"error_description": description,
 	}
 	h.writeJSON(w, status, resp)
+}
+
+func (h *OAuthHandlers) writeOAuthServerErrorWithRequestID(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]string{
+		"error":             "server_error",
+		"error_description": "Internal server error",
+	}
+
+	if requestID := middleware.GetReqID(r.Context()); requestID != "" {
+		resp["request_id"] = requestID
+	}
+
+	h.writeJSON(w, http.StatusInternalServerError, resp)
 }
 
 func (h *OAuthHandlers) writeMethodNotAllowed(w http.ResponseWriter, allowed []string) {
