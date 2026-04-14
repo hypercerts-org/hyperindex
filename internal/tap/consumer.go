@@ -2,8 +2,11 @@ package tap
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,6 +41,10 @@ type ConsumerConfig struct {
 	// TapURL is the WebSocket base URL (e.g., "ws://localhost:2480").
 	TapURL string
 
+	// Password is the Basic auth password for the /channel WebSocket endpoint.
+	// The username is always "admin". Leave empty if Tap has no password set.
+	Password string
+
 	// DisableAcks puts the consumer in fire-and-forget mode (no acks sent).
 	DisableAcks bool
 }
@@ -62,6 +69,10 @@ type Stats struct {
 type Consumer struct {
 	config  ConsumerConfig
 	handler EventHandler
+
+	// writeTextFn allows overriding WebSocket write behavior in tests.
+	// When nil, writeText is used.
+	writeTextFn func(conn *websocket.Conn, msg string) error
 
 	// conn is the active WebSocket connection.
 	conn   *websocket.Conn
@@ -107,10 +118,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 		default:
 		}
 
-		err := c.runOnce(ctx)
+		connected, immediateReconnect, err := c.runOnce(ctx)
 
-		// Reset backoff only after a successful connection (not failed dials).
-		if err == nil {
+		// Reset backoff if we successfully established a connection (even if it
+		// later dropped with an error). This prevents slow reconnects after a
+		// long-running session that ended with a network error.
+		if connected {
 			backoff = minBackoff
 		}
 
@@ -126,6 +139,12 @@ func (c *Consumer) Start(ctx context.Context) error {
 		// If context was cancelled, this is a graceful shutdown — do not log.
 		if ctx.Err() != nil {
 			return ctx.Err()
+		}
+
+		if immediateReconnect {
+			slog.Warn("Tap ack write failed, reconnecting immediately", "error", err)
+			slog.Info("Attempting to reconnect to Tap...")
+			continue
 		}
 
 		if err != nil {
@@ -159,14 +178,23 @@ func (c *Consumer) Start(ctx context.Context) error {
 }
 
 // runOnce establishes one WebSocket connection and processes events until it closes.
-func (c *Consumer) runOnce(ctx context.Context) error {
+// Returns (connected, immediateReconnect, error) where connected is true if the dial
+// succeeded (even if the connection later dropped with an error), and
+// immediateReconnect indicates a known-dead connection scenario (like ack write
+// failure) that should bypass backoff.
+func (c *Consumer) runOnce(ctx context.Context) (bool, bool, error) {
 	channelURL := c.config.TapURL + tapChannelPath
 
 	slog.Info("Connecting to Tap", "url", channelURL)
 
-	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, nil)
+	var header http.Header
+	if c.config.Password != "" {
+		creds := base64.StdEncoding.EncodeToString([]byte("admin:" + c.config.Password))
+		header = http.Header{"Authorization": []string{"Basic " + creds}}
+	}
+	conn, _, err := websocket.DefaultDialer.DialContext(ctx, channelURL, header)
 	if err != nil {
-		return fmt.Errorf("failed to connect to Tap: %w", err)
+		return false, false, fmt.Errorf("failed to connect to Tap: %w", err)
 	}
 	conn.SetReadLimit(maxMessageSize)
 
@@ -187,23 +215,23 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 		// Check for stop signal before reading.
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return true, false, ctx.Err()
 		case <-c.done:
-			return nil
+			return true, false, nil
 		default:
 		}
 
 		// Set read deadline.
 		if err := conn.SetReadDeadline(time.Now().Add(defaultReadTimeout)); err != nil {
-			return fmt.Errorf("failed to set read deadline: %w", err)
+			return true, false, fmt.Errorf("failed to set read deadline: %w", err)
 		}
 
 		msgType, data, err := conn.ReadMessage()
 		if err != nil {
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
-				return nil
+				return true, false, nil
 			}
-			return fmt.Errorf("read error: %w", err)
+			return true, false, fmt.Errorf("read error: %w", err)
 		}
 
 		if msgType != websocket.TextMessage {
@@ -221,14 +249,19 @@ func (c *Consumer) runOnce(ctx context.Context) error {
 		}
 
 		if err := c.dispatch(ctx, conn, event); err != nil {
+			atomic.AddInt64(&c.errors, 1)
+			// If the error came from a write (ack failure), the connection is dead.
+			// Return immediately to reconnect rather than continuing to read and
+			// generating a cascade of identical errors.
+			if isWriteError(err) {
+				return true, true, fmt.Errorf("failed during Tap ack write: %w", err)
+			}
+			// Handler errors are non-fatal — log and continue processing.
 			slog.Warn("Failed to handle Tap event",
 				"event_id", event.ID,
 				"type", event.Type,
 				"error", err,
 			)
-			atomic.AddInt64(&c.errors, 1)
-			// Do not ack on handler error.
-			continue
 		}
 	}
 }
@@ -261,9 +294,15 @@ func (c *Consumer) dispatch(ctx context.Context, conn *websocket.Conn, event *Ev
 	}
 
 	// Send ack unless disabled.
+	// The Tap server expects JSON: {"type":"ack","id":<id>}
+	// See: https://github.com/bluesky-social/indigo/blob/main/cmd/tap/types.go
 	if !c.config.DisableAcks {
-		ackMsg := fmt.Sprintf("%d", event.ID)
-		if err := c.writeText(conn, ackMsg); err != nil {
+		ackMsg := fmt.Sprintf(`{"type":"ack","id":%d}`, event.ID)
+		writeFn := c.writeText
+		if c.writeTextFn != nil {
+			writeFn = c.writeTextFn
+		}
+		if err := writeFn(conn, ackMsg); err != nil {
 			return fmt.Errorf("failed to send ack for event %d: %w", event.ID, err)
 		}
 	}
@@ -277,6 +316,18 @@ func (c *Consumer) writeText(conn *websocket.Conn, msg string) error {
 		return fmt.Errorf("failed to set write deadline: %w", err)
 	}
 	return conn.WriteMessage(websocket.TextMessage, []byte(msg))
+}
+
+// isWriteError reports whether err originated from a failed ack write.
+// These errors mean the connection is dead and we should reconnect immediately
+// rather than continuing to read and generating a cascade of identical errors.
+func isWriteError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "failed to send ack") ||
+		strings.Contains(msg, "failed to set write deadline")
 }
 
 // incrementRecordStat increments the appropriate record stat counter.

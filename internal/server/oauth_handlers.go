@@ -5,10 +5,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/GainForest/hypergoat/internal/database"
 	"github.com/GainForest/hypergoat/internal/database/repositories"
@@ -314,7 +317,17 @@ func (h *OAuthHandlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		h.redirectWithError(w, redirectURI, "server_error", "Failed to generate DPoP key", state)
 		return
 	}
-	dpopKeyJSON, _ := dpopKey.ToPrivateJSON()
+	dpopKeyJSON, err := dpopKey.ToPrivateJSON()
+	if err != nil {
+		h.redirectWithError(w, redirectURI, "server_error", "Failed to serialize DPoP key", state)
+		return
+	}
+
+	signingJKT, err := dpopKey.CalculateJKT()
+	if err != nil {
+		h.redirectWithError(w, redirectURI, "server_error", "Failed to compute DPoP key thumbprint", state)
+		return
+	}
 
 	// Generate PKCE for ATP OAuth
 	pkceVerifier, err := oauth.GenerateCodeVerifier()
@@ -330,7 +343,7 @@ func (h *OAuthHandlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		AuthorizationServer: authServer.Issuer,
 		Nonce:               sessionID, // Use session ID as correlation
 		PKCEVerifier:        pkceVerifier,
-		SigningPublicKey:    dpopKey.CalculateJKT(),
+		SigningPublicKey:    signingJKT,
 		DPoPPrivateKey:      dpopKeyJSON,
 		CreatedAt:           now,
 		ExpiresAt:           expiresAt,
@@ -347,7 +360,7 @@ func (h *OAuthHandlers) HandleAuthorize(w http.ResponseWriter, r *http.Request) 
 		DID:              &did,
 		SessionCreatedAt: now,
 		ATPOAuthState:    atpOAuthState,
-		SigningKeyJKT:    dpopKey.CalculateJKT(),
+		SigningKeyJKT:    signingJKT,
 		DPoPKey:          dpopKeyJSON,
 	}
 	if err := h.atpSessions.Insert(ctx, atpSession); err != nil {
@@ -884,7 +897,20 @@ func (h *OAuthHandlers) HandleJWKS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if h.config.SigningKey != nil {
-		jwk := h.config.SigningKey.ToJWK()
+		jwk, err := h.config.SigningKey.ToJWK()
+		if err != nil {
+			slog.Error("failed to convert signing key to JWK for JWKS endpoint", "error", err)
+			h.writeOAuthServerErrorWithRequestID(w, r)
+			return
+		}
+
+		kid, err := h.config.SigningKey.CalculateJKT()
+		if err != nil {
+			slog.Error("failed to compute signing key thumbprint for JWKS endpoint", "error", err)
+			h.writeOAuthServerErrorWithRequestID(w, r)
+			return
+		}
+
 		jwks["keys"] = []interface{}{
 			map[string]interface{}{
 				"kty": jwk.Kty,
@@ -892,7 +918,7 @@ func (h *OAuthHandlers) HandleJWKS(w http.ResponseWriter, r *http.Request) {
 				"x":   jwk.X,
 				"y":   jwk.Y,
 				"use": "sig",
-				"kid": h.config.SigningKey.CalculateJKT(),
+				"kid": kid,
 			},
 		}
 	}
@@ -1006,6 +1032,19 @@ func (h *OAuthHandlers) writeOAuthError(w http.ResponseWriter, status int, error
 		"error_description": description,
 	}
 	h.writeJSON(w, status, resp)
+}
+
+func (h *OAuthHandlers) writeOAuthServerErrorWithRequestID(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]string{
+		"error":             "server_error",
+		"error_description": "Internal server error",
+	}
+
+	if requestID := middleware.GetReqID(r.Context()); requestID != "" {
+		resp["request_id"] = requestID
+	}
+
+	h.writeJSON(w, http.StatusInternalServerError, resp)
 }
 
 func (h *OAuthHandlers) writeMethodNotAllowed(w http.ResponseWriter, allowed []string) {
