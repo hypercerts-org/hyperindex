@@ -145,7 +145,7 @@ export function AdminDidBatchPicker({
                       {actor.avatar ? (
                         <Image
                           src={actor.avatar}
-                          alt=""
+                          alt={actor.handle ? `Avatar for @${actor.handle}` : actor.displayName ? `Avatar for ${actor.displayName}` : `Avatar for ${actor.did}`}
                           width={24}
                           height={24}
                           className="rounded-full"

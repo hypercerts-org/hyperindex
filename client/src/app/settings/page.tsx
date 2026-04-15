@@ -1,6 +1,7 @@
 "use client";
 
-import { useState } from "react";
+import Image from "next/image";
+import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_SETTINGS, GET_OAUTH_CLIENTS } from "@/lib/graphql/queries";
@@ -12,6 +13,20 @@ import {
 } from "@/components/ui";
 import { AdminDidBatchPicker } from "@/components/admin/AdminDidBatchPicker";
 import type { SettingsResponse, OAuthClientsResponse } from "@/types";
+
+type BlueskyProfile = {
+  did: string;
+  handle: string;
+  displayName?: string;
+  avatar?: string;
+};
+
+type BlueskyProfilesResponse = {
+  profiles?: BlueskyProfile[];
+};
+
+const BLUESKY_PROFILES_ENDPOINT = "https://public.api.bsky.app/xrpc/app.bsky.actor.getProfiles";
+const PROFILES_CHUNK_SIZE = 25;
 
 export default function SettingsPage() {
   const queryClient = useQueryClient();
@@ -30,6 +45,50 @@ export default function SettingsPage() {
 
   const settings = settingsData?.settings;
   const oauthClients = oauthData?.oauthClients ?? [];
+  const adminDids = settings?.adminDids ?? [];
+
+  const { data: adminProfiles = [], isFetching: isFetchingAdminProfiles } = useQuery({
+    queryKey: ["admin-profiles", adminDids],
+    queryFn: async () => {
+      const chunks: string[][] = [];
+      for (let i = 0; i < adminDids.length; i += PROFILES_CHUNK_SIZE) {
+        chunks.push(adminDids.slice(i, i + PROFILES_CHUNK_SIZE));
+      }
+
+      const responses = await Promise.allSettled(
+        chunks.map(async (chunk) => {
+          const params = new URLSearchParams();
+          for (const did of chunk) {
+            params.append("actors", did);
+          }
+
+          const response = await fetch(`${BLUESKY_PROFILES_ENDPOINT}?${params.toString()}`, {
+            method: "GET",
+            headers: {
+              Accept: "application/json",
+            },
+          });
+
+          if (!response.ok) {
+            return [] as BlueskyProfile[];
+          }
+
+          const data = (await response.json()) as BlueskyProfilesResponse;
+          return data.profiles ?? [];
+        }),
+      );
+
+      return responses
+        .filter((result): result is PromiseFulfilledResult<BlueskyProfile[]> => result.status === "fulfilled")
+        .flatMap((result) => result.value);
+    },
+    enabled: adminDids.length > 0,
+  });
+
+  const adminProfilesByDid = useMemo(
+    () => new Map(adminProfiles.map((profile) => [profile.did, profile])),
+    [adminProfiles],
+  );
 
   // Form state
   const [domainAuthority, setDomainAuthority] = useState<string | null>(null);
@@ -256,18 +315,61 @@ export default function SettingsPage() {
             <p className="text-sm font-medium" style={{ color: "var(--foreground)" }}>
               Current administrators
             </p>
-            {settings?.adminDids.length === 0 ? (
+            {adminDids.length === 0 ? (
               <p className="text-sm" style={{ color: "var(--muted-foreground)" }}>
                 No administrators configured
               </p>
             ) : (
-              <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
-                {settings?.adminDids.map((did) => (
-                  <li key={did} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
-                    <code className="text-sm font-mono" style={{ color: "var(--secondary-foreground)" }}>{did}</code>
-                  </li>
-                ))}
-              </ul>
+              <div className="space-y-2">
+                {isFetchingAdminProfiles ? (
+                  <p className="text-xs" style={{ color: "var(--muted-foreground)" }}>
+                    Resolving Bluesky handles...
+                  </p>
+                ) : null}
+                <ul className="divide-y" style={{ borderColor: "var(--border)" }}>
+                  {adminDids.map((did) => {
+                    const profile = adminProfilesByDid.get(did);
+                    const displayName = profile?.displayName || profile?.handle || did;
+                    const handle = profile?.handle;
+
+                    return (
+                      <li key={did} className="flex items-center justify-between py-3 first:pt-0 last:pb-0">
+                        <div className="min-w-0 flex items-center gap-3">
+                          {profile?.avatar ? (
+                            <Image
+                              src={profile.avatar}
+                              alt={handle ? `Avatar for @${handle}` : profile?.displayName ? `Avatar for ${profile.displayName}` : `Avatar for ${did}`}
+                              width={28}
+                              height={28}
+                              className="rounded-full"
+                            />
+                          ) : (
+                            <div
+                              className="flex size-7 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold"
+                              style={{ backgroundColor: "var(--muted)", color: "var(--muted-foreground)" }}
+                            >
+                              {(displayName || did).slice(0, 1).toUpperCase()}
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium" style={{ color: "var(--foreground)" }}>
+                              {displayName}
+                            </p>
+                            {handle ? (
+                              <p className="truncate text-xs" style={{ color: "var(--muted-foreground)" }}>
+                                @{handle}
+                              </p>
+                            ) : null}
+                            <code className="truncate text-xs font-mono" style={{ color: "var(--muted-foreground)" }}>
+                              {did}
+                            </code>
+                          </div>
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
             )}
           </div>
 
