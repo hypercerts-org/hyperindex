@@ -22,7 +22,9 @@ const nextConfig: NextConfig = {
   },
   // Proxy API requests to Hyperindex backend during development
   async rewrites() {
-    const apiUrl = normalizeUrl(process.env.NEXT_PUBLIC_HYPERINDEX_URL || "http://localhost:8080");
+    const apiUrl =
+      normalizeUrl(process.env.NEXT_PUBLIC_HYPERINDEX_URL || "") ||
+      "http://localhost:8080";
     return [
       {
         source: "/admin/graphql",
