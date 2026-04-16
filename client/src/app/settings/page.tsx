@@ -100,7 +100,6 @@ export default function SettingsPage() {
   const [isSubmittingAdmins, setIsSubmittingAdmins] = useState(false);
   const [purgeDid, setPurgeDid] = useState("");
   const [purgeConfirm, setPurgeConfirm] = useState("");
-  const [removeFromTap, setRemoveFromTap] = useState(false);
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [alert, setAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
 
@@ -147,13 +146,12 @@ export default function SettingsPage() {
 
   // Purge actor mutation
   const purgeActorMutation = useMutation({
-    mutationFn: (variables: { did: string; confirm: string; removeFromTap: boolean }) =>
+    mutationFn: (variables: { did: string; confirm: string }) =>
       graphqlClient.request<{ purgeActor: boolean }>(PURGE_ACTOR, variables),
     onSuccess: () => {
       queryClient.invalidateQueries();
       setPurgeDid("");
       setPurgeConfirm("");
-      setRemoveFromTap(false);
       setAlert({ type: "success", message: "Actor data purged successfully" });
     },
     onError: (error: Error) => {
@@ -187,7 +185,6 @@ export default function SettingsPage() {
     purgeActorMutation.mutate({
       did: normalizedPurgeDid,
       confirm: purgeConfirm,
-      removeFromTap,
     });
   };
 
@@ -482,7 +479,7 @@ export default function SettingsPage() {
         <div className="rounded-xl border border-red-200/60 bg-red-50/30 p-6 space-y-4">
           <div className="space-y-4 pb-4 border-b border-red-200/60">
             <p className="text-sm" style={{ color: "var(--secondary-foreground)" }}>
-              Purge a single DID from the index. This removes all indexed records and the actor row. Optionally remove the DID from Tap tracking.
+              Purge a single DID from the index. This removes all indexed records and the actor row.
             </p>
             <Input
               label="Actor DID"
@@ -496,14 +493,6 @@ export default function SettingsPage() {
               value={purgeConfirm}
               onChange={(e) => setPurgeConfirm(e.target.value)}
             />
-            <label className="flex items-center gap-2 text-sm" style={{ color: "var(--secondary-foreground)" }}>
-              <input
-                type="checkbox"
-                checked={removeFromTap}
-                onChange={(e) => setRemoveFromTap(e.target.checked)}
-              />
-              Also remove this DID from Tap tracking
-            </label>
             <div className="flex justify-end">
               <Button
                 variant="destructive"

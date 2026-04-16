@@ -540,7 +540,7 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 			},
 			"purgeActor": &graphql.Field{
 				Type:        graphql.NewNonNull(graphql.Boolean),
-				Description: "Purge all indexed data for a DID and optionally remove it from Tap tracking (admin only)",
+				Description: "Purge all indexed data for a DID (admin only)",
 				Args: graphql.FieldConfigArgument{
 					"did": &graphql.ArgumentConfig{
 						Type:        graphql.NewNonNull(graphql.String),
@@ -550,10 +550,6 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 						Type:        graphql.NewNonNull(graphql.String),
 						Description: "Must be 'PURGE' to confirm",
 					},
-					"removeFromTap": &graphql.ArgumentConfig{
-						Type:        graphql.Boolean,
-						Description: "Also remove DID from Tap /repos tracking",
-					},
 				},
 				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
 					if err := requireAdmin(p.Context); err != nil {
@@ -561,8 +557,7 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					}
 					did, _ := p.Args["did"].(string)
 					confirm, _ := p.Args["confirm"].(string)
-					removeFromTap, _ := p.Args["removeFromTap"].(bool)
-					return b.resolver.PurgeActor(p.Context, did, confirm, removeFromTap)
+					return b.resolver.PurgeActor(p.Context, did, confirm)
 				},
 			},
 			"createOAuthClient": &graphql.Field{

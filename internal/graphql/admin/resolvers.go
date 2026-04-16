@@ -44,9 +44,6 @@ type BackfillCallback func(ctx context.Context, did string) error
 // FullBackfillCallback is called when full network backfill is triggered.
 type FullBackfillCallback func(ctx context.Context) error
 
-// RemoveRepoCallback is called to remove a DID from Tap tracking.
-type RemoveRepoCallback func(ctx context.Context, did string) error
-
 // LexiconChangeCallback is called when lexicons are added or removed.
 type LexiconChangeCallback func(collections []string) error
 
@@ -57,7 +54,6 @@ type Resolver struct {
 	domainDID             string // The DID of this labeler instance
 	backfillCallback      BackfillCallback
 	fullBackfillCallback  FullBackfillCallback
-	removeRepoCallback    RemoveRepoCallback
 	lexiconChangeCallback LexiconChangeCallback
 }
 
@@ -77,11 +73,6 @@ func (r *Resolver) SetBackfillCallback(cb BackfillCallback) {
 // SetFullBackfillCallback sets the callback for full network backfill operations.
 func (r *Resolver) SetFullBackfillCallback(cb FullBackfillCallback) {
 	r.fullBackfillCallback = cb
-}
-
-// SetRemoveRepoCallback sets the callback for removing a DID from Tap tracking.
-func (r *Resolver) SetRemoveRepoCallback(cb RemoveRepoCallback) {
-	r.removeRepoCallback = cb
 }
 
 // SetLexiconChangeCallback sets the callback for lexicon changes.
@@ -561,8 +552,8 @@ func (r *Resolver) RemoveAdmin(ctx context.Context, did string) (bool, error) {
 	return true, nil
 }
 
-// PurgeActor removes all indexed data for a DID and optionally untracks it in Tap.
-func (r *Resolver) PurgeActor(ctx context.Context, did, confirm string, removeFromTap bool) (bool, error) {
+// PurgeActor removes all indexed data for a DID.
+func (r *Resolver) PurgeActor(ctx context.Context, did, confirm string) (bool, error) {
 	if confirm != "PURGE" {
 		return false, fmt.Errorf("confirmation required: pass 'PURGE' to confirm")
 	}
@@ -575,15 +566,6 @@ func (r *Resolver) PurgeActor(ctx context.Context, did, confirm string, removeFr
 
 	if err := r.repos.Records.PurgeActorData(ctx, normalizedDID); err != nil {
 		return false, fmt.Errorf("failed to purge actor data for DID: %w", err)
-	}
-
-	if removeFromTap {
-		if r.removeRepoCallback == nil {
-			return false, fmt.Errorf("tap remove callback not configured")
-		}
-		if err := r.removeRepoCallback(ctx, normalizedDID); err != nil {
-			return false, fmt.Errorf("failed to remove DID from Tap tracking: %w", err)
-		}
 	}
 
 	return true, nil

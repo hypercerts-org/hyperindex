@@ -607,7 +607,7 @@ func TestAdminGraphQL_PurgeActor_Success(t *testing.T) {
 	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
 
 	mutation := `mutation {
-		purgeActor(did: "did:plc:target", confirm: "PURGE", removeFromTap: false)
+		purgeActor(did: "did:plc:target", confirm: "PURGE")
 	}`
 
 	result := executeQuery(schema, mutation, adminCtx)
@@ -658,7 +658,7 @@ func TestAdminGraphQL_PurgeActor_RequiresAdmin(t *testing.T) {
 
 	userCtx := admin.ContextWithAuth(ctx, "did:plc:user1", "user.bsky.social", false, []string{"did:plc:admin1"})
 	mutation := `mutation {
-		purgeActor(did: "did:plc:target", confirm: "PURGE", removeFromTap: false)
+		purgeActor(did: "did:plc:target", confirm: "PURGE")
 	}`
 
 	result := executeQuery(schema, mutation, userCtx)
@@ -678,7 +678,7 @@ func TestAdminGraphQL_PurgeActor_InvalidConfirm(t *testing.T) {
 
 	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
 	mutation := `mutation {
-		purgeActor(did: "did:plc:target", confirm: "RESET", removeFromTap: false)
+		purgeActor(did: "did:plc:target", confirm: "RESET")
 	}`
 
 	result := executeQuery(schema, mutation, adminCtx)
@@ -698,7 +698,7 @@ func TestAdminGraphQL_PurgeActor_InvalidDID(t *testing.T) {
 
 	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
 	mutation := `mutation {
-		purgeActor(did: "not-a-did", confirm: "PURGE", removeFromTap: false)
+		purgeActor(did: "not-a-did", confirm: "PURGE")
 	}`
 
 	result := executeQuery(schema, mutation, adminCtx)
