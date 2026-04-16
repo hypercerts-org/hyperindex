@@ -843,6 +843,10 @@ func startTap(
 			return adminClient.AddRepos(ctx, []string{did})
 		})
 
+		adminHandler.Resolver().SetRemoveRepoCallback(func(ctx context.Context, did string) error {
+			return adminClient.RemoveRepos(ctx, []string{did})
+		})
+
 		adminHandler.Resolver().SetFullBackfillCallback(func(_ context.Context) error {
 			return fmt.Errorf("full network backfill not supported via Tap admin API — configure TAP_SIGNAL_COLLECTION or TAP_FULL_NETWORK on the Tap sidecar instead")
 		})

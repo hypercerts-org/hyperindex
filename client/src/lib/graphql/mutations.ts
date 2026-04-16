@@ -56,6 +56,13 @@ export const RESET_ALL = gql`
   }
 `;
 
+// Purge Actor
+export const PURGE_ACTOR = gql`
+  mutation PurgeActor($did: String!, $confirm: String!, $removeFromTap: Boolean) {
+    purgeActor(did: $did, confirm: $confirm, removeFromTap: $removeFromTap)
+  }
+`;
+
 // Create OAuth Client
 export const CREATE_OAUTH_CLIENT = gql`
   mutation CreateOAuthClient(

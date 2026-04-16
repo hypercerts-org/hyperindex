@@ -241,6 +241,23 @@ func (b *SchemaBuilder) buildQueryType() *graphql.Object {
 					return b.resolver.Reports(p.Context, statusPtr, first, afterPtr)
 				},
 			},
+			"purgeActorPreview": &graphql.Field{
+				Type:        graphql.NewNonNull(PurgePreviewType),
+				Description: "Preview actor existence and indexed record count before purging (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"did": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "DID to preview",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					did, _ := p.Args["did"].(string)
+					return b.resolver.PurgeActorPreview(p.Context, did)
+				},
+			},
 		},
 	})
 }
@@ -519,6 +536,33 @@ func (b *SchemaBuilder) buildMutationType() *graphql.Object {
 					}
 					did, _ := p.Args["did"].(string)
 					return b.resolver.BackfillActor(p.Context, did)
+				},
+			},
+			"purgeActor": &graphql.Field{
+				Type:        graphql.NewNonNull(graphql.Boolean),
+				Description: "Purge all indexed data for a DID and optionally remove it from Tap tracking (admin only)",
+				Args: graphql.FieldConfigArgument{
+					"did": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "The DID to purge",
+					},
+					"confirm": &graphql.ArgumentConfig{
+						Type:        graphql.NewNonNull(graphql.String),
+						Description: "Must be 'PURGE' to confirm",
+					},
+					"removeFromTap": &graphql.ArgumentConfig{
+						Type:        graphql.Boolean,
+						Description: "Also remove DID from Tap /repos tracking",
+					},
+				},
+				Resolve: func(p graphql.ResolveParams) (interface{}, error) {
+					if err := requireAdmin(p.Context); err != nil {
+						return nil, err
+					}
+					did, _ := p.Args["did"].(string)
+					confirm, _ := p.Args["confirm"].(string)
+					removeFromTap, _ := p.Args["removeFromTap"].(bool)
+					return b.resolver.PurgeActor(p.Context, did, confirm, removeFromTap)
 				},
 			},
 			"createOAuthClient": &graphql.Field{
