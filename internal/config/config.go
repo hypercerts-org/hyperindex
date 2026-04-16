@@ -140,6 +140,11 @@ func Load() (*Config, error) {
 		cfg.ExternalBaseURL = fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
 	}
 
+	// Normalize external base URL: add https:// if no scheme is present
+	if !strings.HasPrefix(cfg.ExternalBaseURL, "http://") && !strings.HasPrefix(cfg.ExternalBaseURL, "https://") {
+		cfg.ExternalBaseURL = "https://" + cfg.ExternalBaseURL
+	}
+
 	return cfg, nil
 }
 

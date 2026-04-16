@@ -417,6 +417,45 @@ func TestTapConfigFields(t *testing.T) {
 	}
 }
 
+func TestExternalBaseURLNormalization(t *testing.T) {
+	tests := []struct {
+		name     string
+		envValue string
+		want     string
+	}{
+		{
+			name:     "adds https:// when no scheme present",
+			envValue: "hyperindex-pr-base.up.railway.app",
+			want:     "https://hyperindex-pr-base.up.railway.app",
+		},
+		{
+			name:     "preserves existing https://",
+			envValue: "https://hyperindex-pr-base.up.railway.app",
+			want:     "https://hyperindex-pr-base.up.railway.app",
+		},
+		{
+			name:     "preserves existing http://",
+			envValue: "http://localhost:8080",
+			want:     "http://localhost:8080",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			os.Setenv("EXTERNAL_BASE_URL", tt.envValue)
+			defer os.Unsetenv("EXTERNAL_BASE_URL")
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.ExternalBaseURL != tt.want {
+				t.Errorf("ExternalBaseURL = %q, want %q", cfg.ExternalBaseURL, tt.want)
+			}
+		})
+	}
+}
+
 func TestGenerateRandomKey(t *testing.T) {
 	tests := []struct {
 		name   string
