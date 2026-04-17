@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { normalizePublicURL, resolvePublicClientURL } from "./env";
+import { normalizePublicURL, resolvePublicClientURL, validateHyperindexURLConfiguration } from "./env";
 
 describe("normalizePublicURL", () => {
   const cases: Array<{ input: string; expected: string }> = [
@@ -29,5 +29,23 @@ describe("resolvePublicClientURL", () => {
 
   it("returns empty string when both are empty", () => {
     expect(resolvePublicClientURL("", "")).toBe("");
+  });
+});
+
+describe("validateHyperindexURLConfiguration", () => {
+  it("throws when the backend url matches the client origin", () => {
+    expect(() =>
+      validateHyperindexURLConfiguration("www.dev.hi.gainforest.app", "", "https://www.dev.hi.gainforest.app"),
+    ).toThrow(/points to the client origin/);
+  });
+
+  it("allows different backend and client origins", () => {
+    expect(() =>
+      validateHyperindexURLConfiguration(
+        "www.dev.hi.gainforest.app",
+        "",
+        "https://hyperindex-staging.up.railway.app",
+      ),
+    ).not.toThrow();
   });
 });
