@@ -438,6 +438,16 @@ func TestExternalBaseURLNormalization(t *testing.T) {
 			envValue: "http://localhost:8080",
 			want:     "http://localhost:8080",
 		},
+		{
+			name:     "trims leading and trailing whitespace",
+			envValue: "  hyperindex-pr-base.up.railway.app  ",
+			want:     "https://hyperindex-pr-base.up.railway.app",
+		},
+		{
+			name:     "preserves uppercase HTTPS:// scheme without double-prepending",
+			envValue: "HTTPS://hyperindex-pr-base.up.railway.app",
+			want:     "HTTPS://hyperindex-pr-base.up.railway.app",
+		},
 	}
 
 	for _, tt := range tests {
