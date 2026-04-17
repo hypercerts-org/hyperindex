@@ -7,6 +7,8 @@ package integration
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"testing"
 
 	"github.com/GainForest/hypergoat/internal/database"
@@ -563,5 +565,215 @@ func TestAdminGraphQL_OAuthClients(t *testing.T) {
 	clients = data["oauthClients"].([]interface{})
 	if len(clients) != 0 {
 		t.Errorf("Expected 0 clients after delete, got %d", len(clients))
+	}
+}
+
+func TestAdminGraphQL_PurgeActor_Success(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	// Seed target + control actor/records
+	if err := db.Actors.Upsert(ctx, "did:plc:target", "target.bsky.social"); err != nil {
+		t.Fatalf("failed to seed target actor: %v", err)
+	}
+	if err := db.Actors.Upsert(ctx, "did:plc:other", "other.bsky.social"); err != nil {
+		t.Fatalf("failed to seed other actor: %v", err)
+	}
+
+	if _, err := db.Records.Insert(ctx,
+		"at://did:plc:target/app.certified.actor.profile/1",
+		"cid-target-1",
+		"did:plc:target",
+		"app.certified.actor.profile",
+		`{"displayName":"Target"}`,
+	); err != nil {
+		t.Fatalf("failed to seed target record: %v", err)
+	}
+	if _, err := db.Records.Insert(ctx,
+		"at://did:plc:other/app.certified.actor.profile/1",
+		"cid-other-1",
+		"did:plc:other",
+		"app.certified.actor.profile",
+		`{"displayName":"Other"}`,
+	); err != nil {
+		t.Fatalf("failed to seed other record: %v", err)
+	}
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
+
+	mutation := `mutation {
+		purgeActor(did: "did:plc:target", confirm: "PURGE")
+	}`
+
+	result := executeQuery(schema, mutation, adminCtx)
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	purged, ok := data["purgeActor"].(bool)
+	if !ok || !purged {
+		t.Fatalf("purgeActor returned %v, want true", data["purgeActor"])
+	}
+
+	targetRecords, err := db.Records.GetByDID(ctx, "did:plc:target")
+	if err != nil {
+		t.Fatalf("GetByDID(target) error: %v", err)
+	}
+	if len(targetRecords) != 0 {
+		t.Fatalf("expected target records purged, got %d", len(targetRecords))
+	}
+
+	_, err = db.Actors.GetByDID(ctx, "did:plc:target")
+	if !errors.Is(err, sql.ErrNoRows) {
+		t.Fatalf("expected target actor deleted (sql.ErrNoRows), got %v", err)
+	}
+
+	otherRecords, err := db.Records.GetByDID(ctx, "did:plc:other")
+	if err != nil {
+		t.Fatalf("GetByDID(other) error: %v", err)
+	}
+	if len(otherRecords) != 1 {
+		t.Fatalf("expected other DID records retained, got %d", len(otherRecords))
+	}
+
+	if _, err := db.Actors.GetByDID(ctx, "did:plc:other"); err != nil {
+		t.Fatalf("expected other actor retained, got error: %v", err)
+	}
+}
+
+func TestAdminGraphQL_PurgeActor_RequiresAdmin(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	userCtx := admin.ContextWithAuth(ctx, "did:plc:user1", "user.bsky.social", false, []string{"did:plc:admin1"})
+	mutation := `mutation {
+		purgeActor(did: "did:plc:target", confirm: "PURGE")
+	}`
+
+	result := executeQuery(schema, mutation, userCtx)
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for non-admin purgeActor")
+	}
+}
+
+func TestAdminGraphQL_PurgeActor_InvalidConfirm(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
+	mutation := `mutation {
+		purgeActor(did: "did:plc:target", confirm: "RESET")
+	}`
+
+	result := executeQuery(schema, mutation, adminCtx)
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for invalid confirm value")
+	}
+}
+
+func TestAdminGraphQL_PurgeActor_InvalidDID(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
+	mutation := `mutation {
+		purgeActor(did: "not-a-did", confirm: "PURGE")
+	}`
+
+	result := executeQuery(schema, mutation, adminCtx)
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for invalid DID format")
+	}
+}
+
+func TestAdminGraphQL_PurgeActorPreview(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	if err := db.Actors.Upsert(ctx, "did:plc:target", "target.bsky.social"); err != nil {
+		t.Fatalf("failed to seed actor: %v", err)
+	}
+	if _, err := db.Records.Insert(ctx,
+		"at://did:plc:target/app.certified.actor.profile/1",
+		"cid-target-1",
+		"did:plc:target",
+		"app.certified.actor.profile",
+		`{"displayName":"Target"}`,
+	); err != nil {
+		t.Fatalf("failed to seed record: %v", err)
+	}
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	adminCtx := admin.ContextWithAuth(ctx, "did:plc:admin1", "admin.example.com", true, []string{"did:plc:admin1"})
+	query := `query {
+		purgeActorPreview(did: "did:plc:target") {
+			did
+			isValidDid
+			actorExists
+			recordCount
+		}
+	}`
+
+	result := executeQuery(schema, query, adminCtx)
+	if len(result.Errors) > 0 {
+		t.Fatalf("GraphQL errors: %v", result.Errors)
+	}
+
+	data := result.Data.(map[string]interface{})
+	preview := data["purgeActorPreview"].(map[string]interface{})
+	if preview["did"] != "did:plc:target" {
+		t.Fatalf("did = %v, want did:plc:target", preview["did"])
+	}
+	if preview["isValidDid"] != true {
+		t.Fatalf("isValidDid = %v, want true", preview["isValidDid"])
+	}
+	if preview["actorExists"] != true {
+		t.Fatalf("actorExists = %v, want true", preview["actorExists"])
+	}
+	if toInt(preview["recordCount"]) != 1 {
+		t.Fatalf("recordCount = %v, want 1", preview["recordCount"])
+	}
+}
+
+func TestAdminGraphQL_PurgeActorPreview_RequiresAdmin(t *testing.T) {
+	db := setupTestDB(t)
+	ctx := context.Background()
+
+	schema, err := buildAdminSchema(db)
+	if err != nil {
+		t.Fatalf("Failed to build schema: %v", err)
+	}
+
+	userCtx := admin.ContextWithAuth(ctx, "did:plc:user1", "user.bsky.social", false, []string{"did:plc:admin1"})
+	query := `query { purgeActorPreview(did: "did:plc:target") { did } }`
+
+	result := executeQuery(schema, query, userCtx)
+	if len(result.Errors) == 0 {
+		t.Fatal("expected error for non-admin purgeActorPreview")
 	}
 }

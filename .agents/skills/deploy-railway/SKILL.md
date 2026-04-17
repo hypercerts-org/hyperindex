@@ -97,7 +97,7 @@ railway up --path-as-root client/ -s frontend -d
 | Variable | Value |
 |----------|-------|
 | `PORT` | `3000` |
-| `PUBLIC_URL` | `https://hi.gainforest.app` |
+| `NEXT_PUBLIC_CLIENT_URL` | `https://hi.gainforest.app` |
 | `NEXT_PUBLIC_API_URL` | `https://api.hi.gainforest.app` |
 | `HYPERINDEX_URL` | `https://api.hi.gainforest.app` |
 | `COOKIE_SECRET` | *(set on Railway, do not change)* |
@@ -120,7 +120,7 @@ SSL certificate is still provisioning. Wait 5-15 minutes after adding DNS record
 GraphiQL is served directly by the backend. The frontend has a `/graphiql` server-side redirect route that redirects to `https://api.hi.gainforest.app/graphiql`.
 
 ### OAuth login fails
-Check that `ATPROTO_JWK_PRIVATE` and `PUBLIC_URL` are set on the frontend service. Generate a new JWK with:
+Check that `ATPROTO_JWK_PRIVATE` and `NEXT_PUBLIC_CLIENT_URL` are set on the frontend service. Generate a new JWK with:
 ```bash
 node scripts/generate-jwk.js  # (in hyperscan repo, or client/scripts/ if copied)
 ```

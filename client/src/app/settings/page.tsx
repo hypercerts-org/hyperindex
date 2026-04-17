@@ -4,15 +4,15 @@ import Image from "next/image";
 import { useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
-import { GET_SETTINGS, GET_OAUTH_CLIENTS } from "@/lib/graphql/queries";
-import { UPDATE_SETTINGS, RESET_ALL, ADD_ADMIN } from "@/lib/graphql/mutations";
+import { GET_SETTINGS, GET_OAUTH_CLIENTS, GET_PURGE_ACTOR_PREVIEW } from "@/lib/graphql/queries";
+import { UPDATE_SETTINGS, RESET_ALL, ADD_ADMIN, PURGE_ACTOR } from "@/lib/graphql/mutations";
 import {
   Button,
   Input,
   Alert,
 } from "@/components/ui";
 import { AdminDidBatchPicker } from "@/components/admin/AdminDidBatchPicker";
-import type { SettingsResponse, OAuthClientsResponse } from "@/types";
+import type { SettingsResponse, OAuthClientsResponse, PurgeActorPreviewResponse } from "@/types";
 
 type BlueskyProfile = {
   did: string;
@@ -98,8 +98,24 @@ export default function SettingsPage() {
   const [oauthScopes, setOauthScopes] = useState<string | null>(null);
   const [pendingAdminDids, setPendingAdminDids] = useState<string[]>([]);
   const [isSubmittingAdmins, setIsSubmittingAdmins] = useState(false);
+  const [purgeDid, setPurgeDid] = useState("");
+  const [purgeConfirm, setPurgeConfirm] = useState("");
   const [resetConfirmation, setResetConfirmation] = useState("");
   const [alert, setAlert] = useState<{ type: "success" | "error"; message: string } | null>(null);
+
+  const normalizedPurgeDid = purgeDid.trim();
+  const hasPurgeDid = normalizedPurgeDid.length > 0;
+
+  const { data: purgePreviewData, isFetching: isFetchingPurgePreview } = useQuery({
+    queryKey: ["purge-actor-preview", normalizedPurgeDid],
+    queryFn: () =>
+      graphqlClient.request<PurgeActorPreviewResponse>(GET_PURGE_ACTOR_PREVIEW, {
+        did: normalizedPurgeDid,
+      }),
+    enabled: hasPurgeDid,
+  });
+
+  const purgePreview = purgePreviewData?.purgeActorPreview;
 
   // Update settings mutation
   const updateMutation = useMutation({
@@ -128,6 +144,21 @@ export default function SettingsPage() {
     },
   });
 
+  // Purge actor mutation
+  const purgeActorMutation = useMutation({
+    mutationFn: (variables: { did: string; confirm: string }) =>
+      graphqlClient.request<{ purgeActor: boolean }>(PURGE_ACTOR, variables),
+    onSuccess: () => {
+      queryClient.invalidateQueries();
+      setPurgeDid("");
+      setPurgeConfirm("");
+      setAlert({ type: "success", message: "Actor data purged successfully" });
+    },
+    onError: (error: Error) => {
+      setAlert({ type: "error", message: error.message });
+    },
+  });
+
   const handleSaveSettings = () => {
     const nextDomainAuthority = domainAuthority ?? settings?.domainAuthority ?? "";
     const nextRelayURL = relayUrl ?? settings?.relayUrl ?? "";
@@ -148,6 +179,13 @@ export default function SettingsPage() {
     if (resetConfirmation === "RESET") {
       resetMutation.mutate("RESET");
     }
+  };
+
+  const handlePurgeActor = () => {
+    purgeActorMutation.mutate({
+      did: normalizedPurgeDid,
+      confirm: purgeConfirm,
+    });
   };
 
   const handleAddPendingDid = (did: string) => {
@@ -439,6 +477,50 @@ export default function SettingsPage() {
           Danger Zone
         </h3>
         <div className="rounded-xl border border-red-200/60 bg-red-50/30 p-6 space-y-4">
+          <div className="space-y-4 pb-4 border-b border-red-200/60">
+            <p className="text-sm" style={{ color: "var(--secondary-foreground)" }}>
+              Purge a single DID from the index. This removes all indexed records and the actor row.
+            </p>
+            <Input
+              label="Actor DID"
+              placeholder="did:plc:..."
+              value={purgeDid}
+              onChange={(e) => setPurgeDid(e.target.value)}
+            />
+            <Input
+              label="Type PURGE to confirm"
+              placeholder="PURGE"
+              value={purgeConfirm}
+              onChange={(e) => setPurgeConfirm(e.target.value)}
+            />
+            <div className="flex justify-end">
+              <Button
+                variant="destructive"
+              onClick={handlePurgeActor}
+                disabled={!hasPurgeDid || purgeConfirm !== "PURGE"}
+                loading={purgeActorMutation.isPending}
+              >
+                Purge Actor Data
+              </Button>
+            </div>
+            {hasPurgeDid ? (
+              <div className="rounded-lg border px-3 py-2 text-xs" style={{ borderColor: "var(--border)", color: "var(--secondary-foreground)", backgroundColor: "var(--card)" }}>
+                {isFetchingPurgePreview ? (
+                  <p>Checking current index impact…</p>
+                ) : purgePreview ? (
+                  <>
+                    <p><strong>DID:</strong> <code>{purgePreview.did}</code></p>
+                    <p><strong>Valid DID:</strong> {purgePreview.isValidDid ? "yes" : "no"}</p>
+                    <p><strong>Actor exists:</strong> {purgePreview.actorExists ? "yes" : "no"}</p>
+                    <p><strong>Indexed records to delete:</strong> {purgePreview.recordCount}</p>
+                  </>
+                ) : (
+                  <p>Unable to load purge preview.</p>
+                )}
+              </div>
+            ) : null}
+          </div>
+
           <p className="text-sm" style={{ color: "var(--secondary-foreground)" }}>
             Reset all data including records, actors, and activity. This action cannot be undone.
           </p>

@@ -229,6 +229,30 @@ var SettingsType = graphql.NewObject(graphql.ObjectConfig{
 	},
 })
 
+// PurgePreviewType represents purge impact preview for a DID.
+var PurgePreviewType = graphql.NewObject(graphql.ObjectConfig{
+	Name:        "PurgePreview",
+	Description: "Preview information for purging a DID",
+	Fields: graphql.Fields{
+		"did": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Normalized DID",
+		},
+		"isValidDid": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "Whether the DID format is valid",
+		},
+		"actorExists": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Boolean),
+			Description: "Whether an actor row exists for this DID",
+		},
+		"recordCount": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.Int),
+			Description: "Number of indexed records for this DID",
+		},
+	},
+})
+
 // ActivityBucketType represents aggregated activity for a time bucket.
 var ActivityBucketType = graphql.NewObject(graphql.ObjectConfig{
 	Name:        "ActivityBucket",

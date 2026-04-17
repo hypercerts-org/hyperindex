@@ -100,6 +100,7 @@ func TestObjectTypes(t *testing.T) {
 		{"StatisticsType", StatisticsType},
 		{"CurrentSessionType", CurrentSessionType},
 		{"SettingsType", SettingsType},
+		{"PurgePreviewType", PurgePreviewType},
 		{"ActivityBucketType", ActivityBucketType},
 		{"ActivityEntryType", ActivityEntryType},
 		{"LexiconType", LexiconType},

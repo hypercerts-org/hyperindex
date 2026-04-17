@@ -240,6 +240,70 @@ func TestActorsRepository_DeleteAll(t *testing.T) {
 	}
 }
 
+func TestActorsRepository_DeleteByDID(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(t *testing.T, repo *repositories.ActorsRepository, ctx context.Context)
+		deleteDID string
+		wantErr   bool
+		verify    func(t *testing.T, repo *repositories.ActorsRepository, ctx context.Context)
+	}{
+		{
+			name: "deletes only target actor",
+			setup: func(t *testing.T, repo *repositories.ActorsRepository, ctx context.Context) {
+				if err := repo.Upsert(ctx, "did:plc:alice", "alice.bsky.social"); err != nil {
+					t.Fatalf("failed to upsert alice: %v", err)
+				}
+				if err := repo.Upsert(ctx, "did:plc:bob", "bob.bsky.social"); err != nil {
+					t.Fatalf("failed to upsert bob: %v", err)
+				}
+			},
+			deleteDID: "did:plc:alice",
+			wantErr:   false,
+			verify: func(t *testing.T, repo *repositories.ActorsRepository, ctx context.Context) {
+				_, err := repo.GetByDID(ctx, "did:plc:alice")
+				if !errors.Is(err, sql.ErrNoRows) {
+					t.Fatalf("expected sql.ErrNoRows for deleted actor, got %v", err)
+				}
+				bob, err := repo.GetByDID(ctx, "did:plc:bob")
+				if err != nil {
+					t.Fatalf("expected bob actor to remain, got error: %v", err)
+				}
+				if bob.DID != "did:plc:bob" {
+					t.Fatalf("bob.DID = %q, want %q", bob.DID, "did:plc:bob")
+				}
+			},
+		},
+		{
+			name:      "non-existing did is no-op",
+			setup:     nil,
+			deleteDID: "did:plc:does-not-exist",
+			wantErr:   false,
+			verify:    nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := setupActorsTest(t)
+			ctx := context.Background()
+
+			if tt.setup != nil {
+				tt.setup(t, repo, ctx)
+			}
+
+			err := repo.DeleteByDID(ctx, tt.deleteDID)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("DeleteByDID() error = %v, wantErr %v", err, tt.wantErr)
+			}
+
+			if tt.verify != nil {
+				tt.verify(t, repo, ctx)
+			}
+		})
+	}
+}
+
 func TestActorsRepository_Exists(t *testing.T) {
 	repo := setupActorsTest(t)
 	ctx := context.Background()

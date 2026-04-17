@@ -95,3 +95,15 @@ export const IS_BACKFILLING = gql`
     isBackfilling
   }
 `;
+
+// Purge Actor Preview
+export const GET_PURGE_ACTOR_PREVIEW = gql`
+  query GetPurgeActorPreview($did: String!) {
+    purgeActorPreview(did: $did) {
+      did
+      isValidDid
+      actorExists
+      recordCount
+    }
+  }
+`;
