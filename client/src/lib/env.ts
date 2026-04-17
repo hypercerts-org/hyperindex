@@ -12,6 +12,19 @@ function getPort(): number {
   return port ? parseInt(port, 10) : 3000;
 }
 
+function getOrigin(value: string): string {
+  const normalized = normalizePublicURL(value);
+  if (!normalized) {
+    return "";
+  }
+
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return "";
+  }
+}
+
 export function normalizePublicURL(value: string): string {
   const trimmed = value.trim().replace(/\/+$/, "");
   if (!trimmed) {
@@ -31,11 +44,30 @@ export function resolvePublicClientURL(publicClientUrl: string, vercelBranchUrl:
   return normalizedPublicClientUrl || normalizedVercelBranchUrl;
 }
 
+export function validateHyperindexURLConfiguration(
+  publicClientUrl: string,
+  vercelBranchUrl: string,
+  hyperindexUrl: string,
+): void {
+  const clientOrigin = getOrigin(resolvePublicClientURL(publicClientUrl, vercelBranchUrl));
+  const hyperindexOrigin = getOrigin(hyperindexUrl);
+
+  if (clientOrigin && hyperindexOrigin && clientOrigin === hyperindexOrigin) {
+    throw new Error(
+      `Invalid config: HYPERINDEX_URL / NEXT_PUBLIC_HYPERINDEX_URL points to the client origin (${clientOrigin}). ` +
+        `It must point to the backend/Hyperindex URL, not the frontend.`,
+    );
+  }
+}
+
 const vercelBranchUrl = process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL || "";
 const publicClientUrl = process.env.NEXT_PUBLIC_CLIENT_URL || "";
 const nextPublicHyperindexUrl = process.env.NEXT_PUBLIC_HYPERINDEX_URL || "";
 const normalizedNextPublicHyperindexUrl = normalizePublicURL(nextPublicHyperindexUrl);
 const normalizedHyperindexUrl = normalizePublicURL(process.env.HYPERINDEX_URL || "");
+const resolvedHyperindexUrl = normalizedHyperindexUrl || normalizedNextPublicHyperindexUrl || "http://127.0.0.1:8080";
+
+validateHyperindexURLConfiguration(publicClientUrl, vercelBranchUrl, resolvedHyperindexUrl);
 
 export const env = {
   // Secret for encrypting session cookies (must be at least 32 chars)
@@ -55,8 +87,5 @@ export const env = {
 
   // Server-side only — use this for private/internal network endpoints (e.g. Railway private networking).
   // Falls back to NEXT_PUBLIC_HYPERINDEX_URL so you only need one var if both URLs are the same.
-  HYPERINDEX_URL:
-    normalizedHyperindexUrl ||
-    normalizedNextPublicHyperindexUrl ||
-    "http://127.0.0.1:8080",
+  HYPERINDEX_URL: resolvedHyperindexUrl,
 };
