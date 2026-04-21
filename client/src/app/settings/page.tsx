@@ -1,11 +1,14 @@
 "use client";
 
 import Image from "next/image";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { graphqlClient } from "@/lib/graphql/client";
 import { GET_SETTINGS, GET_OAUTH_CLIENTS, GET_PURGE_ACTOR_PREVIEW } from "@/lib/graphql/queries";
 import { UPDATE_SETTINGS, RESET_ALL, ADD_ADMIN, PURGE_ACTOR } from "@/lib/graphql/mutations";
+import { useAuth } from "@/lib/auth";
+import { env, isAdminDID } from "@/lib/env";
 import {
   Button,
   Input,
@@ -29,18 +32,33 @@ const BLUESKY_PROFILES_ENDPOINT = "https://public.api.bsky.app/xrpc/app.bsky.act
 const PROFILES_CHUNK_SIZE = 25;
 
 export default function SettingsPage() {
+  const router = useRouter();
+  const { isAuthenticated, isLoading: isAuthLoading, session } = useAuth();
   const queryClient = useQueryClient();
+  const hasAdminAccess = isAuthenticated && isAdminDID(session?.did, env.ADMIN_DIDS);
+
+  useEffect(() => {
+    if (isAuthLoading) {
+      return;
+    }
+
+    if (!hasAdminAccess) {
+      router.replace("/");
+    }
+  }, [hasAdminAccess, isAuthLoading, router]);
 
   // Fetch settings
   const { data: settingsData, isLoading } = useQuery({
     queryKey: ["settings"],
     queryFn: () => graphqlClient.request<SettingsResponse>(GET_SETTINGS),
+    enabled: hasAdminAccess,
   });
 
   // Fetch OAuth clients
   const { data: oauthData } = useQuery({
     queryKey: ["oauthClients"],
     queryFn: () => graphqlClient.request<OAuthClientsResponse>(GET_OAUTH_CLIENTS),
+    enabled: hasAdminAccess,
   });
 
   const settings = settingsData?.settings;
@@ -82,7 +100,7 @@ export default function SettingsPage() {
         .filter((result): result is PromiseFulfilledResult<BlueskyProfile[]> => result.status === "fulfilled")
         .flatMap((result) => result.value);
     },
-    enabled: adminDids.length > 0,
+    enabled: hasAdminAccess && adminDids.length > 0,
   });
 
   const adminProfilesByDid = useMemo(
@@ -112,7 +130,7 @@ export default function SettingsPage() {
       graphqlClient.request<PurgeActorPreviewResponse>(GET_PURGE_ACTOR_PREVIEW, {
         did: normalizedPurgeDid,
       }),
-    enabled: hasPurgeDid,
+    enabled: hasAdminAccess && hasPurgeDid,
   });
 
   const purgePreview = purgePreviewData?.purgeActorPreview;
@@ -248,7 +266,7 @@ export default function SettingsPage() {
     });
   };
 
-  if (isLoading) {
+  if (isAuthLoading || !hasAdminAccess || isLoading) {
     return (
       <div className="pt-8 sm:pt-12 space-y-6">
         {[...Array(3)].map((_, i) => (
