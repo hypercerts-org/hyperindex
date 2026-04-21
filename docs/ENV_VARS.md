@@ -81,6 +81,7 @@ Primary env parser: `client/src/lib/env.ts`
 | Variable | Required | Why it exists |
 |---|---:|---|
 | `NEXT_PUBLIC_HYPERINDEX_URL` | Yes for non-local deploys | Build-time/public API URL baked into the JS bundle. Used by Next rewrites and docs/examples shown in UI. |
+| `NEXT_PUBLIC_ADMIN_DIDS` | Recommended when using admin UI | Comma-separated admin DIDs exposed to the client for UI gating of admin-only routes and links like `/settings`. Keep it in sync with backend `ADMIN_DIDS`. |
 | `HYPERINDEX_URL` | No | Server-side only — prefer this for private/internal network endpoints (e.g. Railway private networking). Falls back to `NEXT_PUBLIC_HYPERINDEX_URL`. |
 
 ### OAuth and session

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import Image from 'next/image'
 import { usePathname } from 'next/navigation'
 import { useAuth } from '@/lib/auth'
+import { env, isAdminDID } from '@/lib/env'
 import { ThemeToggle } from '@/components/ThemeToggle'
 
 const navLinks = [
@@ -17,6 +18,7 @@ const navLinks = [
 export function Header() {
   const pathname = usePathname()
   const { isAuthenticated, isLoading, session, login, logout } = useAuth()
+  const hasAdminAccess = isAuthenticated && isAdminDID(session?.did, env.ADMIN_DIDS)
   const [showDropdown, setShowDropdown] = useState(false)
   const [showLoginModal, setShowLoginModal] = useState(false)
   const [handle, setHandle] = useState('')
@@ -171,14 +173,16 @@ export function Header() {
 
                   {/* Extra links */}
                   <div className="py-1">
-                    <Link
-                      href="/settings"
-                      onClick={() => setShowDropdown(false)}
-                      className="block px-4 py-2 text-sm transition-colors"
-                      style={{ color: isActive('/settings') ? 'var(--primary)' : 'var(--foreground)' }}
-                    >
-                      Settings
-                    </Link>
+                    {hasAdminAccess && (
+                      <Link
+                        href="/settings"
+                        onClick={() => setShowDropdown(false)}
+                        className="block px-4 py-2 text-sm transition-colors"
+                        style={{ color: isActive('/settings') ? 'var(--primary)' : 'var(--foreground)' }}
+                      >
+                        Settings
+                      </Link>
+                    )}
                     <a
                       href="/graphiql"
                       target="_blank"

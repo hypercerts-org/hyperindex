@@ -240,6 +240,9 @@ EXTERNAL_BASE_URL=http://localhost:8080
 # Admin access (comma-separated DIDs)
 ADMIN_DIDS=did:plc:your-did-here
 
+# Client-side admin UI gating (keep in sync with ADMIN_DIDS)
+NEXT_PUBLIC_ADMIN_DIDS=did:plc:your-did-here
+
 # Security — required for session encryption (min 64 chars)
 SECRET_KEY_BASE=your-secret-key-at-least-64-characters-long-generate-with-openssl-rand
 
