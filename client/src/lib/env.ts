@@ -12,19 +12,100 @@ function getPort(): number {
   return port ? parseInt(port, 10) : 3000;
 }
 
+export function parseAdminDIDs(value: string): string[] {
+  return value
+    .split(",")
+    .map((did) => did.trim())
+    .filter((did) => did.length > 0);
+}
+
+export function isAdminDID(did: string | null | undefined, adminDIDs: readonly string[]): boolean {
+  if (!did) {
+    return false;
+  }
+
+  return adminDIDs.includes(did.trim());
+}
+
+function getOrigin(value: string): string {
+  const normalized = normalizePublicURL(value);
+  if (!normalized) {
+    return "";
+  }
+
+  try {
+    return new URL(normalized).origin;
+  } catch {
+    return "";
+  }
+}
+
+export function normalizePublicURL(value: string): string {
+  const trimmed = value.trim().replace(/\/+$/, "");
+  if (!trimmed) {
+    return "";
+  }
+
+  if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+    return trimmed;
+  }
+
+  return `https://${trimmed}`;
+}
+
+export function resolvePublicClientURL(publicClientUrl: string, vercelBranchUrl: string): string {
+  const normalizedPublicClientUrl = normalizePublicURL(publicClientUrl);
+  const normalizedVercelBranchUrl = normalizePublicURL(vercelBranchUrl);
+  return normalizedPublicClientUrl || normalizedVercelBranchUrl;
+}
+
+export function validateHyperindexURLConfiguration(
+  publicClientUrl: string,
+  vercelBranchUrl: string,
+  hyperindexUrl: string,
+): void {
+  const clientOrigin = getOrigin(resolvePublicClientURL(publicClientUrl, vercelBranchUrl));
+  const hyperindexOrigin = getOrigin(hyperindexUrl);
+
+  if (clientOrigin && hyperindexOrigin && clientOrigin === hyperindexOrigin) {
+    throw new Error(
+      `Invalid config: HYPERINDEX_URL / NEXT_PUBLIC_HYPERINDEX_URL points to the client origin (${clientOrigin}). ` +
+        `It must point to the backend/Hyperindex URL, not the frontend.`,
+    );
+  }
+}
+
+const vercelBranchUrl = process.env.NEXT_PUBLIC_VERCEL_BRANCH_URL || "";
+const publicClientUrl = process.env.NEXT_PUBLIC_CLIENT_URL || "";
+const nextPublicHyperindexUrl = process.env.NEXT_PUBLIC_HYPERINDEX_URL || "";
+const nextPublicAdminDIDs = process.env.NEXT_PUBLIC_ADMIN_DIDS || "";
+const normalizedNextPublicHyperindexUrl = normalizePublicURL(nextPublicHyperindexUrl);
+const normalizedHyperindexUrl = normalizePublicURL(process.env.HYPERINDEX_URL || "");
+const resolvedHyperindexUrl = normalizedHyperindexUrl || normalizedNextPublicHyperindexUrl || "http://127.0.0.1:8080";
+const parsedAdminDIDs = parseAdminDIDs(nextPublicAdminDIDs);
+
+validateHyperindexURLConfiguration(publicClientUrl, vercelBranchUrl, resolvedHyperindexUrl);
+
 export const env = {
   // Secret for encrypting session cookies (must be at least 32 chars)
   COOKIE_SECRET: getEnv("COOKIE_SECRET", "development-secret-at-least-32-chars!!"),
-  
+
   // Public URL for OAuth callbacks (empty = use localhost)
-  PUBLIC_URL: getEnv("PUBLIC_URL", ""),
-  
+  PUBLIC_CLIENT_URL: resolvePublicClientURL(publicClientUrl, vercelBranchUrl),
+
   // Port for the Next.js server
   PORT: getPort(),
-  
+
   // Private JWK for confidential OAuth client (optional, for production)
   ATPROTO_JWK_PRIVATE: getEnv("ATPROTO_JWK_PRIVATE", ""),
-  
-  // Hypergoat backend URL
-  HYPERGOAT_URL: getEnv("HYPERGOAT_URL", "http://127.0.0.1:8080"),
+
+  // Client-facing URL baked into the JS bundle at build time
+  NEXT_PUBLIC_HYPERINDEX_URL: normalizedNextPublicHyperindexUrl,
+
+  // Client-visible admin DIDs used for UI gating only.
+  ADMIN_DIDS: parsedAdminDIDs,
+
+  // Server-side only — use this for private/internal network endpoints (e.g. Railway private networking).
+  // Falls back to NEXT_PUBLIC_HYPERINDEX_URL so you only need one var if both URLs are the same.
+  HYPERINDEX_URL: resolvedHyperindexUrl,
 };

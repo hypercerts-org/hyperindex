@@ -552,6 +552,57 @@ func (r *Resolver) RemoveAdmin(ctx context.Context, did string) (bool, error) {
 	return true, nil
 }
 
+// PurgeActor removes all indexed data for a DID.
+func (r *Resolver) PurgeActor(ctx context.Context, did, confirm string) (bool, error) {
+	if confirm != "PURGE" {
+		return false, fmt.Errorf("confirmation required: pass 'PURGE' to confirm")
+	}
+
+	normalizedDID := strings.TrimSpace(did)
+
+	if !strings.HasPrefix(normalizedDID, "did:") {
+		return false, fmt.Errorf("invalid DID format")
+	}
+
+	if err := r.repos.Records.PurgeActorData(ctx, normalizedDID); err != nil {
+		return false, fmt.Errorf("failed to purge actor data for DID: %w", err)
+	}
+
+	return true, nil
+}
+
+// PurgeActorPreview returns the impact of purging a DID.
+func (r *Resolver) PurgeActorPreview(ctx context.Context, did string) (map[string]interface{}, error) {
+	normalizedDID := strings.TrimSpace(did)
+	isValidDID := strings.HasPrefix(normalizedDID, "did:")
+
+	if !isValidDID {
+		return map[string]interface{}{
+			"did":         normalizedDID,
+			"isValidDid":  false,
+			"actorExists": false,
+			"recordCount": 0,
+		}, nil
+	}
+
+	actorExists, err := r.repos.Actors.Exists(ctx, normalizedDID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to check actor existence: %w", err)
+	}
+
+	recordCount, err := r.repos.Records.GetCountByDID(ctx, normalizedDID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to count records by DID: %w", err)
+	}
+
+	return map[string]interface{}{
+		"did":         normalizedDID,
+		"isValidDid":  true,
+		"actorExists": actorExists,
+		"recordCount": recordCount,
+	}, nil
+}
+
 // RegisterLexicon resolves an NSID via DNS and registers the lexicon schema.
 func (r *Resolver) RegisterLexicon(ctx context.Context, nsid string) (map[string]interface{}, error) {
 	// Validate NSID format (at least 3 dot-separated segments)

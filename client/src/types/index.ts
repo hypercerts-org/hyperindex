@@ -94,3 +94,14 @@ export interface OAuthClientsResponse {
 export interface IsBackfillingResponse {
   isBackfilling: boolean;
 }
+
+export interface PurgeActorPreview {
+  did: string;
+  isValidDid: boolean;
+  actorExists: boolean;
+  recordCount: number;
+}
+
+export interface PurgeActorPreviewResponse {
+  purgeActorPreview: PurgeActorPreview;
+}

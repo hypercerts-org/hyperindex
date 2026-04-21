@@ -1,6 +1,7 @@
 package oauth
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"testing"
@@ -25,7 +26,16 @@ func TestGenerateDPoPKeyPair(t *testing.T) {
 		t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
 	}
 
-	if kp.PrivateKey.D.Cmp(kp2.PrivateKey.D) == 0 {
+	d1, err := kp.PrivateKey.Bytes()
+	if err != nil {
+		t.Fatalf("PrivateKey.Bytes() error = %v", err)
+	}
+	d2, err := kp2.PrivateKey.Bytes()
+	if err != nil {
+		t.Fatalf("PrivateKey.Bytes() error = %v", err)
+	}
+
+	if bytes.Equal(d1, d2) {
 		t.Error("GenerateDPoPKeyPair() generated identical keys")
 	}
 }
@@ -36,7 +46,10 @@ func TestDPoPKeyPairToJWK(t *testing.T) {
 		t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
 	}
 
-	jwk := kp.ToJWK()
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		t.Fatalf("ToJWK() error = %v", err)
+	}
 	if jwk.Kty != "EC" {
 		t.Errorf("ToJWK() Kty = %v, want EC", jwk.Kty)
 	}
@@ -49,14 +62,103 @@ func TestDPoPKeyPairToJWK(t *testing.T) {
 	if jwk.Y == "" {
 		t.Error("ToJWK() Y is empty")
 	}
+	coordLen := p256CoordinateSize()
+	xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	if err != nil {
+		t.Fatalf("failed to decode JWK X: %v", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	if err != nil {
+		t.Fatalf("failed to decode JWK Y: %v", err)
+	}
+	if len(xBytes) != coordLen {
+		t.Errorf("ToJWK() decoded X len = %d, want %d", len(xBytes), coordLen)
+	}
+	if len(yBytes) != coordLen {
+		t.Errorf("ToJWK() decoded Y len = %d, want %d", len(yBytes), coordLen)
+	}
 	if jwk.D != "" {
 		t.Error("ToJWK() should not include D (private key)")
 	}
 
 	// Private JWK should include D
-	privateJWK := kp.ToPrivateJWK()
+	privateJWK, err := kp.ToPrivateJWK()
+	if err != nil {
+		t.Fatalf("ToPrivateJWK() error = %v", err)
+	}
 	if privateJWK.D == "" {
 		t.Error("ToPrivateJWK() D is empty")
+	}
+	dBytes, err := base64.RawURLEncoding.DecodeString(privateJWK.D)
+	if err != nil {
+		t.Fatalf("failed to decode private JWK D: %v", err)
+	}
+	if len(dBytes) != coordLen {
+		t.Errorf("ToPrivateJWK() decoded D len = %d, want %d", len(dBytes), coordLen)
+	}
+}
+
+func TestDPoPKeyPairToJWK_FixedWidthWithLeadingZeroComponents(t *testing.T) {
+	coordLen := p256CoordinateSize()
+
+	var kp *DPoPKeyPair
+	for i := 0; i < 10000; i++ {
+		candidate, err := GenerateDPoPKeyPair()
+		if err != nil {
+			t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
+		}
+
+		pubBytes, err := candidate.PublicKey.Bytes()
+		if err != nil {
+			t.Fatalf("PublicKey.Bytes() error = %v", err)
+		}
+		dBytes, err := candidate.PrivateKey.Bytes()
+		if err != nil {
+			t.Fatalf("PrivateKey.Bytes() error = %v", err)
+		}
+
+		hasLeadingZeroCoordinate := pubBytes[1] == 0 || pubBytes[1+coordLen] == 0
+		hasShortPrivateScalar := len(dBytes) < coordLen
+		if hasLeadingZeroCoordinate || hasShortPrivateScalar {
+			kp = candidate
+			break
+		}
+	}
+
+	if kp == nil {
+		t.Fatal("failed to find key with leading-zero coordinate or short private scalar")
+	}
+
+	jwk, err := kp.ToJWK()
+	if err != nil {
+		t.Fatalf("ToJWK() error = %v", err)
+	}
+	privateJWK, err := kp.ToPrivateJWK()
+	if err != nil {
+		t.Fatalf("ToPrivateJWK() error = %v", err)
+	}
+
+	xBytes, err := base64.RawURLEncoding.DecodeString(jwk.X)
+	if err != nil {
+		t.Fatalf("failed to decode JWK X: %v", err)
+	}
+	yBytes, err := base64.RawURLEncoding.DecodeString(jwk.Y)
+	if err != nil {
+		t.Fatalf("failed to decode JWK Y: %v", err)
+	}
+	dBytes, err := base64.RawURLEncoding.DecodeString(privateJWK.D)
+	if err != nil {
+		t.Fatalf("failed to decode private JWK D: %v", err)
+	}
+
+	if len(xBytes) != coordLen {
+		t.Errorf("decoded X len = %d, want %d", len(xBytes), coordLen)
+	}
+	if len(yBytes) != coordLen {
+		t.Errorf("decoded Y len = %d, want %d", len(yBytes), coordLen)
+	}
+	if len(dBytes) != coordLen {
+		t.Errorf("decoded D len = %d, want %d", len(dBytes), coordLen)
 	}
 }
 
@@ -80,11 +182,8 @@ func TestDPoPKeyPairJSON(t *testing.T) {
 	if kp2.PrivateKey != nil {
 		t.Error("ParseDPoPKeyPair(public) should not have PrivateKey")
 	}
-	if kp.PublicKey.X.Cmp(kp2.PublicKey.X) != 0 {
-		t.Error("ParseDPoPKeyPair() X mismatch")
-	}
-	if kp.PublicKey.Y.Cmp(kp2.PublicKey.Y) != 0 {
-		t.Error("ParseDPoPKeyPair() Y mismatch")
+	if !kp.PublicKey.Equal(kp2.PublicKey) {
+		t.Error("ParseDPoPKeyPair() public key mismatch")
 	}
 
 	// Test private JSON roundtrip
@@ -101,8 +200,8 @@ func TestDPoPKeyPairJSON(t *testing.T) {
 	if kp3.PrivateKey == nil {
 		t.Error("ParseDPoPKeyPair(private) should have PrivateKey")
 	}
-	if kp.PrivateKey.D.Cmp(kp3.PrivateKey.D) != 0 {
-		t.Error("ParseDPoPKeyPair() D mismatch")
+	if !kp.PrivateKey.Equal(kp3.PrivateKey) {
+		t.Error("ParseDPoPKeyPair() private key mismatch")
 	}
 }
 
@@ -112,20 +211,29 @@ func TestCalculateJKT(t *testing.T) {
 		t.Fatalf("GenerateDPoPKeyPair() error = %v", err)
 	}
 
-	jkt := kp.CalculateJKT()
+	jkt, err := kp.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() error = %v", err)
+	}
 	if jkt == "" {
 		t.Error("CalculateJKT() returned empty string")
 	}
 
 	// JKT should be consistent for the same key
-	jkt2 := kp.CalculateJKT()
+	jkt2, err := kp.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() second call error = %v", err)
+	}
 	if jkt != jkt2 {
 		t.Error("CalculateJKT() returned different values for same key")
 	}
 
 	// Different keys should have different JKTs
 	kp2, _ := GenerateDPoPKeyPair()
-	jkt3 := kp2.CalculateJKT()
+	jkt3, err := kp2.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() different key error = %v", err)
+	}
 	if jkt == jkt3 {
 		t.Error("CalculateJKT() returned same value for different keys")
 	}
@@ -157,7 +265,10 @@ func TestGenerateAndVerifyDPoPProof(t *testing.T) {
 	}
 
 	// Check JKT matches
-	expectedJKT := kp.CalculateJKT()
+	expectedJKT, err := kp.CalculateJKT()
+	if err != nil {
+		t.Fatalf("CalculateJKT() error = %v", err)
+	}
 	if result.JKT != expectedJKT {
 		t.Errorf("VerifyDPoPProof() JKT = %v, want %v", result.JKT, expectedJKT)
 	}

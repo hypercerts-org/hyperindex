@@ -23,6 +23,18 @@ const (
 
 	// DefaultIterateBatchSize is the default batch size for IterateAll when none specified.
 	DefaultIterateBatchSize = 1000
+
+	// SearchTimeout is the maximum duration for a search query.
+	SearchTimeout = 10 * time.Second
+
+	// MaxINListSize is the maximum number of values allowed in an IN filter clause.
+	// SQLite has a hard 999 parameter limit (SQLITE_MAX_VARIABLE_NUMBER).
+	// We cap well below that to leave room for other query parameters.
+	MaxINListSize = 100
+
+	// MaxFilterConditions is the maximum number of individual filter conditions allowed per query.
+	// The DID filter does not count toward this cap.
+	MaxFilterConditions = 20
 )
 
 // Record represents an AT Protocol record stored in the database.
@@ -34,6 +46,33 @@ type Record struct {
 	JSON       string
 	IndexedAt  time.Time
 	RKey       string
+}
+
+// FieldFilter represents a single filter condition on a JSON field.
+type FieldFilter struct {
+	Field     string      // JSON field name (e.g., "title", "createdAt"). Must be a valid field name.
+	Operator  string      // One of: "eq", "neq", "gt", "lt", "gte", "lte", "in", "contains", "startsWith", "isNull"
+	Value     interface{} // The comparison value. For "in", must be []interface{}. For "isNull", must be bool.
+	FieldType string      // Lexicon type: "string", "integer", "number", "boolean", "datetime"
+}
+
+// DIDFilter represents a filter on the did column.
+// Only eq and in are supported (column-level filter, not JSON).
+// If both EQ and IN are set, EQ takes precedence.
+type DIDFilter struct {
+	EQ string   // Exact match (empty means no eq filter)
+	IN []string // In list (nil/empty means no in filter)
+}
+
+// IsEmpty reports whether the DIDFilter has no conditions set.
+func (d DIDFilter) IsEmpty() bool {
+	return d.EQ == "" && len(d.IN) == 0
+}
+
+// SortOption specifies a sort field and direction for record queries.
+type SortOption struct {
+	Field     string // Field name. If "indexed_at", "uri", "did", "collection", "cid", "rkey" — use column directly. Otherwise, use JSONExtract.
+	Direction string // "ASC" or "DESC"
 }
 
 // CollectionStat represents statistics for a collection.
@@ -94,7 +133,10 @@ func (r *RecordsRepository) Insert(ctx context.Context, uri, cid, did, collectio
 		return Skipped, err
 	}
 
-	if existingCID == cid {
+	// Only skip if both the existing and incoming CID are non-empty and match.
+	// If cid == "" (omitted by Tap for some events), always proceed with the
+	// upsert so new records aren't silently dropped by the "" == "" comparison.
+	if cid != "" && existingCID == cid {
 		return Skipped, nil // Content unchanged
 	}
 
@@ -275,17 +317,18 @@ func (r *RecordsRepository) GetByCollection(ctx context.Context, collection stri
 func (r *RecordsRepository) GetByCollectionWithCursor(ctx context.Context, collection string, limit int, afterTimestamp string) ([]*Record, error) {
 	var sqlStr string
 	var args []any
+	indexedAtExpr := r.normalizedIndextAtExpr()
 
 	if afterTimestamp == "" {
 		// No cursor - get first page, ordered by indexed_at DESC (newest first)
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), indexedAtExpr, limit)
 		args = []any{collection}
 	} else {
 		// With cursor - get records older than the cursor timestamp
 		// Using indexed_at < cursor for "load more" (older posts)
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND indexed_at < %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND %s < %s ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), indexedAtExpr, r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(2)), indexedAtExpr, limit)
 		args = []any{collection, afterTimestamp}
 	}
 
@@ -304,17 +347,21 @@ func (r *RecordsRepository) GetByCollectionWithCursor(ctx context.Context, colle
 func (r *RecordsRepository) GetByCollectionWithKeysetCursor(ctx context.Context, collection string, limit int, afterTimestamp, afterURI string) ([]*Record, error) {
 	var sqlStr string
 	var args []any
+	indexedAtExpr := r.normalizedIndextAtExpr()
 
 	if afterTimestamp == "" && afterURI == "" {
 		// No cursor - get first page
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1), indexedAtExpr, limit)
 		args = []any{collection}
 	} else {
 		// Keyset pagination: get records that sort after (afterTimestamp, afterURI)
 		// ORDER BY indexed_at DESC, uri DESC means "after" = less than
-		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND (indexed_at < %s OR (indexed_at = %s AND uri < %s)) ORDER BY indexed_at DESC, uri DESC LIMIT %d",
-			r.recordColumns(), r.db.Placeholder(1), r.db.Placeholder(2), r.db.Placeholder(3), r.db.Placeholder(4), limit)
+		sqlStr = fmt.Sprintf("SELECT %s FROM record WHERE collection = %s AND (%s < %s OR (%s = %s AND uri < %s)) ORDER BY %s DESC, uri DESC LIMIT %d",
+			r.recordColumns(), r.db.Placeholder(1),
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(2)),
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(3)),
+			r.db.Placeholder(4), indexedAtExpr, limit)
 		args = []any{collection, afterTimestamp, afterTimestamp, afterURI}
 	}
 
@@ -327,10 +374,544 @@ func (r *RecordsRepository) GetByCollectionWithKeysetCursor(ctx context.Context,
 	return scanRecords(rows)
 }
 
+// buildFilterClause builds a SQL WHERE clause fragment from a slice of FieldFilters.
+// startPlaceholder is the 1-based index of the first placeholder to use.
+// Returns the clause string (without leading "AND") and the parameter values.
+// Returns an empty string and nil params if filters is empty.
+func (r *RecordsRepository) buildFilterClause(filters []FieldFilter, startPlaceholder int) (string, []database.Value, error) {
+	if len(filters) == 0 {
+		return "", nil, nil
+	}
+
+	var conditions []string
+	var params []database.Value
+	placeholderIdx := startPlaceholder
+
+	for _, f := range filters {
+		extract := r.db.JSONExtract("json", f.Field)
+
+		// Wrap numeric types in a CAST for proper comparison
+		isNumeric := f.FieldType == "integer" || f.FieldType == "number"
+		if isNumeric {
+			switch r.db.Dialect() {
+			case database.PostgreSQL:
+				extract = fmt.Sprintf("(%s)::numeric", extract)
+			default:
+				extract = fmt.Sprintf("CAST(%s AS REAL)", extract)
+			}
+		}
+
+		switch f.Operator {
+		case "eq":
+			conditions = append(conditions, fmt.Sprintf("%s = %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "neq":
+			conditions = append(conditions, fmt.Sprintf("%s != %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "gt":
+			conditions = append(conditions, fmt.Sprintf("%s > %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "lt":
+			conditions = append(conditions, fmt.Sprintf("%s < %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "gte":
+			conditions = append(conditions, fmt.Sprintf("%s >= %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "lte":
+			conditions = append(conditions, fmt.Sprintf("%s <= %s", extract, r.db.Placeholder(placeholderIdx)))
+			params = append(params, toDBValue(f.Value))
+			placeholderIdx++
+		case "contains":
+			likeOp := "LIKE"
+			if r.db.Dialect() == database.PostgreSQL {
+				likeOp = "ILIKE"
+			}
+			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
+			val := fmt.Sprintf("%%%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
+			params = append(params, database.Text(val))
+			placeholderIdx++
+		case "startsWith":
+			likeOp := "LIKE"
+			if r.db.Dialect() == database.PostgreSQL {
+				likeOp = "ILIKE"
+			}
+			conditions = append(conditions, fmt.Sprintf("%s %s %s ESCAPE '\\'", extract, likeOp, r.db.Placeholder(placeholderIdx)))
+			val := fmt.Sprintf("%s%%", escapeLIKE(fmt.Sprintf("%v", f.Value)))
+			params = append(params, database.Text(val))
+			placeholderIdx++
+		case "isNull":
+			isNull, _ := f.Value.(bool)
+			if isNull {
+				conditions = append(conditions, fmt.Sprintf("%s IS NULL", extract))
+			} else {
+				conditions = append(conditions, fmt.Sprintf("%s IS NOT NULL", extract))
+			}
+		case "in":
+			inVals, _ := f.Value.([]interface{})
+			if len(inVals) == 0 {
+				// Empty IN list — always false
+				conditions = append(conditions, "1 = 0")
+				continue
+			}
+			if len(inVals) > MaxINListSize {
+				return "", nil, fmt.Errorf("IN filter on field %q exceeds maximum of %d values", f.Field, MaxINListSize)
+			}
+			placeholders := r.db.Placeholders(len(inVals), placeholderIdx)
+			conditions = append(conditions, fmt.Sprintf("%s IN (%s)", extract, placeholders))
+			for _, v := range inVals {
+				params = append(params, toDBValue(v))
+				placeholderIdx++
+			}
+		}
+	}
+
+	return strings.Join(conditions, " AND "), params, nil
+}
+
+// buildDIDFilterClause builds a SQL WHERE clause fragment for a DIDFilter.
+// startPlaceholder is the 1-based index of the first placeholder to use.
+// Returns the clause string (without leading "AND"), the parameter values, and
+// the number of placeholders consumed. Returns empty string and nil params if
+// the filter is empty.
+func (r *RecordsRepository) buildDIDFilterClause(f DIDFilter, startPlaceholder int) (string, []database.Value, int) {
+	if f.IsEmpty() {
+		return "", nil, 0
+	}
+
+	// EQ takes precedence over IN when both are set.
+	if f.EQ != "" {
+		clause := fmt.Sprintf("did = %s", r.db.Placeholder(startPlaceholder))
+		return clause, []database.Value{database.Text(f.EQ)}, 1
+	}
+
+	// IN list
+	if len(f.IN) == 0 {
+		// Empty IN list — always false
+		return "1 = 0", nil, 0
+	}
+	placeholders := r.db.Placeholders(len(f.IN), startPlaceholder)
+	clause := fmt.Sprintf("did IN (%s)", placeholders)
+	params := make([]database.Value, len(f.IN))
+	for i, did := range f.IN {
+		params[i] = database.Text(did)
+	}
+	return clause, params, len(f.IN)
+}
+
+// toDBValue converts an interface{} value to a database.Value.
+func toDBValue(v interface{}) database.Value {
+	switch val := v.(type) {
+	case string:
+		return database.Text(val)
+	case int:
+		return database.Int(int64(val))
+	case int64:
+		return database.Int(val)
+	case float64:
+		return database.Float(val)
+	case bool:
+		return database.Bool(val)
+	case nil:
+		return database.Null()
+	default:
+		return database.Text(fmt.Sprintf("%v", val))
+	}
+}
+
+// GetByCollectionFilteredWithKeysetCursor retrieves records for a collection with
+// optional field-level filters and keyset-based pagination.
+// Filters are applied as AND conditions on JSON fields.
+// If didFilter is non-empty, results are further filtered by DID.
+// Records are ordered by (indexed_at DESC, uri DESC).
+func (r *RecordsRepository) GetByCollectionFilteredWithKeysetCursor(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	limit int,
+	afterTimestamp string,
+	afterURI string,
+) ([]*Record, error) {
+	// Build the base WHERE clause
+	// collection = ? is always param 1
+	var whereParts []string
+	var args []any
+
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	args = append(args, collection)
+
+	nextPlaceholder := 2
+	indexedAtExpr := r.normalizedIndextAtExpr()
+
+	// Keyset cursor condition
+	if afterTimestamp != "" && afterURI != "" {
+		p2 := r.db.Placeholder(nextPlaceholder)
+		p3 := r.db.Placeholder(nextPlaceholder + 1)
+		p4 := r.db.Placeholder(nextPlaceholder + 2)
+		whereParts = append(whereParts, fmt.Sprintf("(%s < %s OR (%s = %s AND uri < %s))",
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", p2),
+			indexedAtExpr, r.keysetCursorValueExpr("indexed_at", p3), p4))
+		args = append(args, afterTimestamp, afterTimestamp, afterURI)
+		nextPlaceholder += 3
+	}
+
+	// Field filters
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+	}
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		for _, p := range filterParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+			nextPlaceholder++
+		}
+	}
+
+	// DID filter
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		for _, p := range didParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+		}
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s DESC, uri DESC LIMIT %d",
+		r.recordColumns(), whereClause, indexedAtExpr, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query filtered records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
+}
+
+// directSortColumns is the set of column names that can be used directly in ORDER BY
+// without JSON extraction.
+var directSortColumns = map[string]bool{
+	"indexed_at": true,
+	"uri":        true,
+	"did":        true,
+	"collection": true,
+	"cid":        true,
+	"rkey":       true,
+}
+
+// keysetSortFieldName returns the effective sort field name used by keyset pagination.
+// Nil sort defaults to indexed_at DESC.
+func keysetSortFieldName(sort *SortOption) string {
+	if sort == nil {
+		return "indexed_at"
+	}
+	return sort.Field
+}
+
+// normalizedIndextAtExpr returns the record-side indexed_at expression used for
+// ordering and keyset comparisons. SQLite stores indexed_at as TEXT and may
+// contain mixed formats (e.g. "YYYY-MM-DD HH:MM:SS" and RFC3339), so values are
+// normalized to a canonical sortable UTC representation.
+func (r *RecordsRepository) normalizedIndextAtExpr() string {
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		return "indexed_at"
+	default:
+		return "strftime('%Y-%m-%dT%H:%M:%fZ', indexed_at)"
+	}
+}
+
+// keysetSortFieldExpr returns the SQL expression used on the record side for
+// keyset comparisons.
+func (r *RecordsRepository) keysetSortFieldExpr(sortField string) string {
+	if sortField == "indexed_at" {
+		return r.normalizedIndextAtExpr()
+	}
+
+	if directSortColumns[sortField] {
+		return sortField
+	}
+
+	return r.db.JSONExtract("json", sortField)
+}
+
+// keysetCursorValueExpr returns the SQL expression used on the cursor side for
+// keyset comparisons.
+func (r *RecordsRepository) keysetCursorValueExpr(sortField, placeholder string) string {
+	if sortField != "indexed_at" {
+		return placeholder
+	}
+
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		return fmt.Sprintf("%s::timestamptz", placeholder)
+	default:
+		return fmt.Sprintf("strftime('%%Y-%%m-%%dT%%H:%%M:%%fZ', %s)", placeholder)
+	}
+}
+
+// buildSortExpr builds the ORDER BY expression for a given SortOption.
+// If sort is nil, returns the default "indexed_at DESC, uri DESC".
+// If sort.Field is a direct column, uses it as-is; otherwise uses JSONExtract.
+// Always appends ", uri <direction>" as a tiebreaker unless the sort field IS uri.
+// The uri tiebreaker direction matches the primary sort direction.
+func (r *RecordsRepository) buildSortExpr(sort *SortOption) string {
+	if sort == nil {
+		return fmt.Sprintf("%s DESC, uri DESC", r.normalizedIndextAtExpr())
+	}
+
+	dir := sort.Direction
+	if dir != "ASC" && dir != "DESC" {
+		dir = "DESC"
+	}
+
+	var fieldExpr string
+	switch {
+	case sort.Field == "indexed_at":
+		fieldExpr = r.normalizedIndextAtExpr()
+	case directSortColumns[sort.Field]:
+		fieldExpr = sort.Field
+	default:
+		fieldExpr = r.db.JSONExtract("json", sort.Field)
+	}
+
+	expr := fmt.Sprintf("%s %s", fieldExpr, dir)
+
+	// Append uri tiebreaker unless the primary sort field is already uri
+	if sort.Field != "uri" {
+		expr += fmt.Sprintf(", uri %s", dir)
+	}
+
+	return expr
+}
+
+// GetByCollectionSortedWithKeysetCursor retrieves records for a collection with
+// optional field-level filters, a configurable sort order, and keyset-based pagination.
+// The sort field and direction are specified via the sort parameter (nil = default indexed_at DESC).
+// afterCursorValues is [sortFieldValue, uri] for keyset pagination; empty means first page.
+// If didFilter is non-empty, results are further filtered by DID.
+func (r *RecordsRepository) GetByCollectionSortedWithKeysetCursor(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	sort *SortOption,
+	limit int,
+	afterCursorValues []string,
+) ([]*Record, error) {
+	var whereParts []string
+	var args []any
+
+	// collection = ? is always param 1
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	args = append(args, collection)
+
+	nextPlaceholder := 2
+
+	// Keyset cursor condition
+	if len(afterCursorValues) == 2 {
+		afterSortVal := afterCursorValues[0]
+		afterURI := afterCursorValues[1]
+		sortField := keysetSortFieldName(sort)
+
+		// Determine the sort field expression and comparison operator
+		sortFieldExpr := r.keysetSortFieldExpr(sortField)
+
+		// DESC uses <, ASC uses >
+		var cmp string
+		if sort == nil || sort.Direction == "DESC" {
+			cmp = "<"
+		} else {
+			cmp = ">"
+		}
+
+		p1 := r.db.Placeholder(nextPlaceholder)
+		p2 := r.db.Placeholder(nextPlaceholder + 1)
+		p3 := r.db.Placeholder(nextPlaceholder + 2)
+		cursorExpr1 := r.keysetCursorValueExpr(sortField, p1)
+		cursorExpr2 := r.keysetCursorValueExpr(sortField, p2)
+
+		// Composite keyset: (sortField op afterSortVal) OR (sortField = afterSortVal AND uri op afterURI)
+		whereParts = append(whereParts, fmt.Sprintf(
+			"(%s %s %s OR (%s = %s AND uri %s %s))",
+			sortFieldExpr, cmp, cursorExpr1,
+			sortFieldExpr, cursorExpr2,
+			cmp, p3,
+		))
+		args = append(args, afterSortVal, afterSortVal, afterURI)
+		nextPlaceholder += 3
+	}
+
+	// Field filters
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+	}
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		for _, p := range filterParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+			nextPlaceholder++
+		}
+	}
+
+	// DID filter
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		for _, p := range didParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+		}
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	orderBy := r.buildSortExpr(sort)
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
+		r.recordColumns(), whereClause, orderBy, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query sorted records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
+}
+
+// GetByCollectionReversedWithKeysetCursor retrieves records for backward pagination
+// per the Relay Connection Spec (last/before).
+//
+// Algorithm:
+//  1. Reverse the sort direction (DESC→ASC, ASC→DESC)
+//  2. Reverse the cursor comparison operator (DESC's < becomes >, ASC's > becomes <)
+//  3. Fetch limit records with LIMIT
+//  4. Reverse the result slice in-memory to restore the original sort order
+//
+// This ensures that `last N` returns the last N edges in the connection, and
+// `last N, before cursor` returns the N edges immediately before the cursor.
+//
+// Fetches limit+1 to allow the caller to detect hasPreviousPage.
+// If didFilter is non-empty, results are further filtered by DID.
+func (r *RecordsRepository) GetByCollectionReversedWithKeysetCursor(
+	ctx context.Context,
+	collection string,
+	filters []FieldFilter,
+	didFilter DIDFilter,
+	sort *SortOption,
+	limit int,
+	beforeCursorValues []string,
+) ([]*Record, error) {
+	// Build the reversed sort option: flip direction
+	var reversedSort *SortOption
+	if sort == nil {
+		// Default is indexed_at DESC → reverse to ASC
+		reversedSort = &SortOption{Field: "indexed_at", Direction: "ASC"}
+	} else {
+		dir := "ASC"
+		if sort.Direction == "ASC" {
+			dir = "DESC"
+		}
+		reversedSort = &SortOption{Field: sort.Field, Direction: dir}
+	}
+
+	var whereParts []string
+	var args []any
+
+	// collection = ? is always param 1
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	args = append(args, collection)
+
+	nextPlaceholder := 2
+
+	// Keyset cursor condition with reversed comparison operator.
+	// For DESC original (reversed to ASC): forward DESC uses <, so reversed uses >
+	// For ASC original (reversed to DESC): forward ASC uses >, so reversed uses <
+	if len(beforeCursorValues) == 2 {
+		beforeSortVal := beforeCursorValues[0]
+		beforeURI := beforeCursorValues[1]
+		sortField := keysetSortFieldName(reversedSort)
+
+		// Determine the sort field expression using the reversed sort's field
+		sortFieldExpr := r.keysetSortFieldExpr(sortField)
+
+		// Reversed comparison: ASC reversed direction uses >, DESC reversed direction uses <
+		var cmp string
+		if reversedSort.Direction == "ASC" {
+			cmp = ">"
+		} else {
+			cmp = "<"
+		}
+
+		p1 := r.db.Placeholder(nextPlaceholder)
+		p2 := r.db.Placeholder(nextPlaceholder + 1)
+		p3 := r.db.Placeholder(nextPlaceholder + 2)
+		cursorExpr1 := r.keysetCursorValueExpr(sortField, p1)
+		cursorExpr2 := r.keysetCursorValueExpr(sortField, p2)
+
+		whereParts = append(whereParts, fmt.Sprintf(
+			"(%s %s %s OR (%s = %s AND uri %s %s))",
+			sortFieldExpr, cmp, cursorExpr1,
+			sortFieldExpr, cursorExpr2,
+			cmp, p3,
+		))
+		args = append(args, beforeSortVal, beforeSortVal, beforeURI)
+		nextPlaceholder += 3
+	}
+
+	// Field filters
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build filter clause: %w", err)
+	}
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		for _, p := range filterParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+			nextPlaceholder++
+		}
+	}
+
+	// DID filter
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		for _, p := range didParams {
+			args = append(args, r.db.ConvertParams([]database.Value{p})[0])
+		}
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	orderBy := r.buildSortExpr(reversedSort)
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE %s ORDER BY %s LIMIT %d",
+		r.recordColumns(), whereClause, orderBy, limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, args...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query reversed records: %w", err)
+	}
+	defer rows.Close()
+
+	records, err := scanRecords(rows)
+	if err != nil {
+		return nil, err
+	}
+
+	// Reverse the result slice to restore the original sort order
+	for i, j := 0, len(records)-1; i < j; i, j = i+1, j-1 {
+		records[i], records[j] = records[j], records[i]
+	}
+
+	return records, nil
+}
+
 // GetByDID retrieves all records for a specific DID.
 func (r *RecordsRepository) GetByDID(ctx context.Context, did string) ([]*Record, error) {
-	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY indexed_at DESC",
-		r.recordColumns(), r.db.Placeholder(1))
+	sqlStr := fmt.Sprintf("SELECT %s FROM record WHERE did = %s ORDER BY %s DESC",
+		r.recordColumns(), r.db.Placeholder(1), r.normalizedIndextAtExpr())
 
 	rows, err := r.db.DB().QueryContext(ctx, sqlStr, did)
 	if err != nil {
@@ -348,6 +929,38 @@ func (r *RecordsRepository) Delete(ctx context.Context, uri string) error {
 	return err
 }
 
+// DeleteByDID removes all records for a specific DID.
+func (r *RecordsRepository) DeleteByDID(ctx context.Context, did string) error {
+	sqlStr := fmt.Sprintf("DELETE FROM record WHERE did = %s", r.db.Placeholder(1))
+	_, err := r.db.Exec(ctx, sqlStr, []database.Value{database.Text(did)})
+	return err
+}
+
+// PurgeActorData atomically removes all records and the actor row for a DID.
+func (r *RecordsRepository) PurgeActorData(ctx context.Context, did string) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer tx.Rollback() // Rollback is a no-op after successful commit.
+
+	deleteRecordsSQL := fmt.Sprintf("DELETE FROM record WHERE did = %s", r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, deleteRecordsSQL, did); err != nil {
+		return fmt.Errorf("failed to delete records by did: %w", err)
+	}
+
+	deleteActorSQL := fmt.Sprintf("DELETE FROM actor WHERE did = %s", r.db.Placeholder(1))
+	if _, err := tx.ExecContext(ctx, deleteActorSQL, did); err != nil {
+		return fmt.Errorf("failed to delete actor by did: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("failed to commit transaction: %w", err)
+	}
+
+	return nil
+}
+
 // DeleteAll removes all records.
 func (r *RecordsRepository) DeleteAll(ctx context.Context) error {
 	_, err := r.db.Exec(ctx, "DELETE FROM record", nil)
@@ -358,6 +971,59 @@ func (r *RecordsRepository) DeleteAll(ctx context.Context) error {
 func (r *RecordsRepository) GetCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.db.QueryRow(ctx, "SELECT COUNT(*) FROM record", nil, &count)
+	return count, err
+}
+
+// GetCollectionCount returns the total record count for a collection.
+func (r *RecordsRepository) GetCollectionCount(ctx context.Context, collection string) (int64, error) {
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE collection = %s", r.db.Placeholder(1))
+	var count int64
+	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(collection)}, &count)
+	return count, err
+}
+
+// GetCountByDID returns the number of records for a specific DID.
+func (r *RecordsRepository) GetCountByDID(ctx context.Context, did string) (int64, error) {
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE did = %s", r.db.Placeholder(1))
+	var count int64
+	err := r.db.QueryRow(ctx, sqlStr, []database.Value{database.Text(did)}, &count)
+	return count, err
+}
+
+// GetCollectionCountFiltered returns the count with optional DID and field filters applied.
+func (r *RecordsRepository) GetCollectionCountFiltered(
+	ctx context.Context, collection string, filters []FieldFilter, didFilter DIDFilter,
+) (int64, error) {
+	var whereParts []string
+	var params []database.Value
+
+	whereParts = append(whereParts, fmt.Sprintf("collection = %s", r.db.Placeholder(1)))
+	params = append(params, database.Text(collection))
+
+	nextPlaceholder := 2
+
+	// Field filters
+	filterClause, filterParams, err := r.buildFilterClause(filters, nextPlaceholder)
+	if err != nil {
+		return 0, fmt.Errorf("failed to build filter clause: %w", err)
+	}
+	if filterClause != "" {
+		whereParts = append(whereParts, filterClause)
+		params = append(params, filterParams...)
+		nextPlaceholder += len(filterParams)
+	}
+
+	// DID filter
+	if didClause, didParams, _ := r.buildDIDFilterClause(didFilter, nextPlaceholder); didClause != "" {
+		whereParts = append(whereParts, didClause)
+		params = append(params, didParams...)
+	}
+
+	whereClause := strings.Join(whereParts, " AND ")
+	sqlStr := fmt.Sprintf("SELECT COUNT(*) FROM record WHERE %s", whereClause)
+
+	var count int64
+	err = r.db.QueryRow(ctx, sqlStr, params, &count)
 	return count, err
 }
 
@@ -589,6 +1255,81 @@ func (r *RecordsRepository) GetExistingCIDs(ctx context.Context, cids []string) 
 	}
 
 	return result, nil
+}
+
+// escapeLIKE escapes special LIKE wildcard characters (%, _) in a user-provided search string.
+// This prevents wildcard injection where user input could match unintended patterns.
+func escapeLIKE(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, "%", `\%`)
+	s = strings.ReplaceAll(s, "_", `\_`)
+	return s
+}
+
+// Search performs a LIKE-based text search on record JSON content.
+// On PostgreSQL, uses case-insensitive ILIKE. On SQLite, LIKE is already case-insensitive for ASCII.
+// collection is optional; if empty, searches across all collections.
+// Supports keyset pagination via afterTimestamp and afterURI.
+func (r *RecordsRepository) Search(
+	ctx context.Context,
+	searchQuery string,
+	collection string,
+	limit int,
+	afterTimestamp string,
+	afterURI string,
+) ([]*Record, error) {
+	ctx, cancel := context.WithTimeout(ctx, SearchTimeout)
+	defer cancel()
+
+	escaped := escapeLIKE(searchQuery)
+	likeValue := "%" + escaped + "%"
+
+	var conditions []string
+	var params []database.Value
+	paramIdx := 1
+
+	// JSON LIKE/ILIKE condition
+	switch r.db.Dialect() {
+	case database.PostgreSQL:
+		conditions = append(conditions, fmt.Sprintf("json::text ILIKE %s ESCAPE '\\'", r.db.Placeholder(paramIdx)))
+	default:
+		conditions = append(conditions, fmt.Sprintf("json LIKE %s ESCAPE '\\'", r.db.Placeholder(paramIdx)))
+	}
+	params = append(params, database.Text(likeValue))
+	paramIdx++
+
+	// Optional collection filter
+	if collection != "" {
+		conditions = append(conditions, fmt.Sprintf("collection = %s", r.db.Placeholder(paramIdx)))
+		params = append(params, database.Text(collection))
+		paramIdx++
+	}
+
+	// Keyset cursor
+	if afterTimestamp != "" && afterURI != "" {
+		indexedAtExpr := r.normalizedIndextAtExpr()
+		conditions = append(conditions, fmt.Sprintf(
+			"(%s < %s OR (%s = %s AND uri < %s))",
+			indexedAtExpr,
+			r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(paramIdx)),
+			indexedAtExpr,
+			r.keysetCursorValueExpr("indexed_at", r.db.Placeholder(paramIdx+1)),
+			r.db.Placeholder(paramIdx+2),
+		))
+		params = append(params, database.Text(afterTimestamp), database.Text(afterTimestamp), database.Text(afterURI))
+	}
+
+	whereClause := "WHERE " + strings.Join(conditions, " AND ")
+	sqlStr := fmt.Sprintf("SELECT %s FROM record %s ORDER BY %s DESC, uri DESC LIMIT %d",
+		r.recordColumns(), whereClause, r.normalizedIndextAtExpr(), limit)
+
+	rows, err := r.db.DB().QueryContext(ctx, sqlStr, r.db.ConvertParams(params)...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search records: %w", err)
+	}
+	defer rows.Close()
+
+	return scanRecords(rows)
 }
 
 // Helper functions

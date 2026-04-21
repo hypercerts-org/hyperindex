@@ -2,11 +2,20 @@ package types //nolint:revive // package name is descriptive within graphql cont
 
 import (
 	"fmt"
+	"log/slog"
 
 	"github.com/graphql-go/graphql"
 
 	"github.com/GainForest/hypergoat/internal/lexicon"
 )
+
+// ReservedRecordFields are field names injected as metadata and must not be overwritten by lexicon properties.
+var ReservedRecordFields = map[string]bool{
+	"uri":  true,
+	"cid":  true,
+	"did":  true,
+	"rkey": true,
+}
 
 // ObjectBuilder builds GraphQL object types from lexicon definitions.
 type ObjectBuilder struct {
@@ -85,6 +94,13 @@ func (b *ObjectBuilder) buildFields(contextRef string, def *lexicon.ObjectDef) g
 		}
 	}
 
+	if len(fields) == 0 {
+		fields["empty"] = &graphql.Field{
+			Type:        graphql.Boolean,
+			Description: "Placeholder field for empty object definitions",
+		}
+	}
+
 	return fields
 }
 
@@ -100,6 +116,14 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 			Type:        graphql.NewNonNull(graphql.String),
 			Description: "CID of this record version",
 		},
+		"did": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "DID of the record author",
+		},
+		"rkey": &graphql.Field{
+			Type:        graphql.NewNonNull(graphql.String),
+			Description: "Record key (last segment of AT-URI)",
+		},
 	}
 
 	// Build required set for quick lookup
@@ -111,6 +135,11 @@ func (b *ObjectBuilder) buildRecordFields(lexiconID string, def *lexicon.RecordD
 	}
 
 	for _, entry := range def.Properties {
+		if ReservedRecordFields[entry.Name] {
+			slog.Warn("Skipping lexicon property that collides with reserved field name",
+				"lexicon", lexiconID, "property", entry.Name)
+			continue
+		}
 		field := b.buildField(lexiconID, entry.Name, &entry.Property, requiredSet[entry.Name])
 		if field != nil {
 			fields[entry.Name] = field
@@ -236,7 +265,7 @@ func (b *ObjectBuilder) buildUnionType(contextLexiconID, fieldName string, refs 
 	}
 
 	// Create union name from context and field
-	unionName := lexicon.ToTypeName(contextLexiconID) + capitalizeFirst(fieldName)
+	unionName := lexicon.ToTypeName(contextLexiconID) + capitalizeFirst(fieldName) + "Union"
 
 	// Check if union already exists
 	if u, ok := b.mapper.GetUnionType(unionName); ok {

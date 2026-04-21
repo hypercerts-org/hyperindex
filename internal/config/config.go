@@ -56,6 +56,12 @@ type Config struct {
 	BackfillMaxRepos          int
 	BackfillRepoTimeoutMS     int
 
+	// Tap (replaces Jetstream + Backfill)
+	TapURL           string // Tap WebSocket URL (default: ws://localhost:2480)
+	TapAdminPassword string // Tap admin API password for Basic auth
+	TapDisableAcks   bool   // Fire-and-forget mode (default: false)
+	TapEnabled       bool   // Use Tap instead of Jetstream+Backfill (default: false)
+
 	// PLC Directory
 	PLCDirectoryURL string // PLC directory URL for DID resolution
 }
@@ -108,6 +114,12 @@ func Load() (*Config, error) {
 		BackfillMaxRepos:          getEnvInt("BACKFILL_MAX_REPOS", 50),
 		BackfillRepoTimeoutMS:     getEnvInt("BACKFILL_REPO_TIMEOUT", 60000),
 
+		// Tap
+		TapURL:           getEnv("TAP_URL", "ws://localhost:2480"),
+		TapAdminPassword: getEnv("TAP_ADMIN_PASSWORD", ""),
+		TapDisableAcks:   getEnvBool("TAP_DISABLE_ACKS", false),
+		TapEnabled:       getEnvBool("TAP_ENABLED", false),
+
 		// PLC Directory
 		PLCDirectoryURL: getEnv("PLC_DIRECTORY_URL", ""),
 	}
@@ -124,8 +136,15 @@ func Load() (*Config, error) {
 	}
 
 	// Set default external base URL if not provided
+	cfg.ExternalBaseURL = strings.TrimSpace(cfg.ExternalBaseURL)
 	if cfg.ExternalBaseURL == "" {
 		cfg.ExternalBaseURL = fmt.Sprintf("http://%s:%d", cfg.Host, cfg.Port)
+	}
+
+	// Normalize external base URL: add https:// if no scheme is present
+	lower := strings.ToLower(cfg.ExternalBaseURL)
+	if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+		cfg.ExternalBaseURL = "https://" + cfg.ExternalBaseURL
 	}
 
 	return cfg, nil
@@ -161,6 +180,10 @@ func (c *Config) LogConfig() {
 		"backfill_on_start", c.BackfillOnStart,
 		"trust_proxy_headers", c.TrustProxyHeaders,
 		"allowed_origins", c.AllowedOrigins,
+		"tap_enabled", c.TapEnabled,
+		"tap_url", c.TapURL,
+		"tap_admin_password_set", c.TapAdminPassword != "",
+		"tap_disable_acks", c.TapDisableAcks,
 	)
 
 	if c.TrustProxyHeaders {
